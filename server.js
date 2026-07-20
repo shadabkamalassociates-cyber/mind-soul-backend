@@ -3,6 +3,11 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const authRouter = require('./routers/auth.routers');
 const { client } = require('./cleint/client');
+const userRouter = require('./routers/user.router');
+const expertRouter = require('./routers/expert.routers');
+const categoryRouter = require('./routers/category.routers');
+const ratingRouter = require('./routers/rating.routers');
+const sessionRouter = require('./routers/session.routers');
 const app = express();
 dotenv.config();
 const PORT = process.env.PORT || 3000;
@@ -23,7 +28,11 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api', authRouter);
-    
+app.use('/api/users', userRouter);
+app.use('/api/experts', expertRouter);
+app.use('/api/categories', categoryRouter);
+app.use('/api/ratings', ratingRouter);
+app.use('/api/sessions', sessionRouter);
 
 
 app.listen(PORT, () => {console.log(`Server is running on port ${PORT}`)});

@@ -7,6 +7,10 @@ authRouter.post("/user/signUp", userRole, register);
 
 authRouter.post("/user/logIn", userRole, login);
 
+authRouter.post("/expert/logIn", expertRole, login);
+
+authRouter.post("/expert/signUp", expertRole, register);
+
 authRouter.post("/admin/logIn", adminRole, login);
 // authRouter.post("/admin/signUp", adminRole, register);
 

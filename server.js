@@ -10,6 +10,7 @@ const categoryRouter = require('./routers/category.routers');
 const ratingRouter = require('./routers/rating.routers');
 const sessionRouter = require('./routers/session.routers');
 const paymentRouter = require('./routers/payment.routers');
+const blogRouter = require('./routers/blog.routers');
 const app = express();
 dotenv.config();
 const PORT = process.env.PORT || 3000;
@@ -36,7 +37,7 @@ app.use('/api/categories', categoryRouter);
 app.use('/api/ratings', ratingRouter);
 app.use('/api/sessions', sessionRouter);
 app.use('/api/payment', paymentRouter);
-
+app.use('/api/blogs', blogRouter);
 
 app.listen(PORT, () => {console.log(`Server is running on port ${PORT}`)});
 

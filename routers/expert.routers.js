@@ -7,13 +7,15 @@ const {
   verifyExpert,
   getVerifiedUsers,
   getBlockedUsers,
+  getUsersById,
 } = require("../controllers/expert.controller");
-const { protect } = require("../middleware/role");
+const { protect, expertRole } = require("../middleware/role");
 
 const expertRouter = express.Router();
 
-expertRouter.get("/fetch-all", getExperts);
+expertRouter.get("/fetch-all", expertRole, getExperts);
 expertRouter.put("/update/:id", updateExpert);
+expertRouter.get("/fetch-by-id/:id", expertRole, getUsersById);
 expertRouter.delete("/delete", deleteExperts);
 expertRouter.patch("/block/:id", blockExpert);
 expertRouter.patch("/verify/:id", verifyExpert);

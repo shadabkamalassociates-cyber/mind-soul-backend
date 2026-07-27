@@ -2,70 +2,134 @@ const { client } = require("../cleint/client");
 
 const getExperts = async (req, res) => {
   try {
+    const role = req.role;
+    const status = req.query.status
+      ? String(req.query.status).toUpperCase()
+      : null;
+
+    const allowedStatuses = ["PENDING", "VERIFIED", "REJECTED"];
+
+    if (status && !allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `status must be one of: ${allowedStatuses.join(", ")}`,
+      });
+    }
+
+    const values = [role];
+    let statusFilter = "";
+
+    if (status) {
+      values.push(status);
+      // Users with no verification row are treated as PENDING
+      statusFilter = `AND COALESCE(uv.status, 'PENDING') = $2`;
+    }
+
     const query = `
-      SELECT
-        u.id,
-        u.first_name,
-        u.last_name,
-        u.email,
-        u.phone,
-        u.role,
-        u.bio,
-        u.experience_years,
-        u.consultation_fee,
-        u.profile_image,
-        u.average_rating,
-        u.total_reviews,
-        u.total_sessions,
-        u.created_at,
+SELECT
+    u.id,
+    u.first_name,
+    u.last_name,
+    u.email,
+    u.phone,
+    u.role,
+    u.bio,
+    u.experience_years,
+    u.consultation_fee,
+    u.profile_image,
 
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', c.id,
-              'name', c.name,
-              'icon', c.icon
+    CASE
+        WHEN ub.is_active = true THEN false
+        ELSE true
+    END AS is_active,
+
+    COALESCE(uv.status, 'PENDING') AS verification_status,
+    uv.reason AS verification_reason,
+    uv.verified_at,
+    uv.verified_by,
+
+    CASE
+        WHEN COALESCE(uv.status, 'PENDING') = 'VERIFIED'
+        THEN true
+        ELSE false
+    END AS is_verified,
+
+    u.average_rating,
+    u.total_reviews,
+    u.total_sessions,
+    u.created_at,
+
+    COALESCE(
+        json_agg(
+            DISTINCT jsonb_build_object(
+                'id', c.id,
+                'name', c.name,
+                'icon', c.icon
             )
-          ) FILTER (WHERE c.id IS NOT NULL),
-          '[]'
-        ) AS categories
+        ) FILTER (WHERE c.id IS NOT NULL),
+        '[]'
+    ) AS categories
 
-      FROM users u
-      LEFT JOIN expert_categories ec
-        ON ec.user_id = u.id
-      LEFT JOIN categories c
-        ON c.id = ec.category_id
+FROM users u
 
-      WHERE u.role = 'EXPERT'
+LEFT JOIN expert_categories ec
+    ON ec.user_id = u.id
 
-      GROUP BY
-        u.id,
-        u.first_name,
-        u.last_name,
-        u.email,
-        u.phone,
-        u.role,
-        u.bio,
-        u.experience_years,
-        u.consultation_fee,
-        u.profile_image,
-        u.status,
-        u.verification_status,
-        u.is_active,
-        u.is_verified,
-        u.average_rating,
-        u.total_reviews,
-        u.total_sessions,
-        u.created_at
+LEFT JOIN categories c
+    ON c.id = ec.category_id
 
-      ORDER BY u.created_at DESC;
-    `;
+LEFT JOIN LATERAL (
+    SELECT status, reason, verified_at, verified_by
+    FROM user_verifications
+    WHERE user_id = u.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) uv ON TRUE
 
-    const { rows } = await client.query(query);
+LEFT JOIN LATERAL (
+    SELECT is_active
+    FROM user_blocks
+    WHERE user_id = u.id
+    ORDER BY created_at DESC
+    LIMIT 1
+) ub ON TRUE
+
+WHERE u.role = $1
+${statusFilter}
+
+GROUP BY
+    u.id,
+    u.first_name,
+    u.last_name,
+    u.email,
+    u.phone,
+    u.role,
+    u.bio,
+    u.experience_years,
+    u.consultation_fee,
+    u.profile_image,
+    ub.is_active,
+    uv.status,
+    uv.reason,
+    uv.verified_at,
+    uv.verified_by,
+    u.average_rating,
+    u.total_reviews,
+    u.total_sessions,
+    u.created_at
+
+ORDER BY u.created_at DESC;
+`;
+
+    const { rows } = await client.query(query, values);
 
     return res.status(200).json({
       success: true,
       count: rows.length,
+      filter: {
+        role,
+        status: status || "ALL",
+      },
       data: rows,
     });
   } catch (error) {
@@ -73,6 +137,53 @@ const getExperts = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
+    });
+  }
+};
+
+const getUsersById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const role = req.role;
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "User id is required.",
+      });
+    }
+    const { rows } = await client.query(
+      `
+      SELECT
+          u.*,
+          uv.id AS verification_id,
+          COALESCE(uv.status, 'PENDING') AS verification_status,
+          uv.reason AS verification_reason,
+          uv.verified_by,
+          uv.verified_at
+      FROM users u
+      LEFT JOIN LATERAL (
+          SELECT *
+          FROM user_verifications
+          WHERE user_id = u.id
+          ORDER BY created_at DESC
+          LIMIT 1
+      ) uv ON TRUE
+      WHERE u.id = $1
+        AND u.role = $2
+      `,
+      [id, role]
+    );
+
+    return res.status(200).json({
+      success: true,
+      count: rows.length,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("Get Users By Id Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
     });
   }
 };
@@ -568,6 +679,7 @@ module.exports = {
   deleteExperts,
   blockExpert,
   verifyExpert,
+  getUsersById,
   getVerifiedUsers,
   getBlockedUsers,
 };

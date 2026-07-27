@@ -1,13 +1,20 @@
 const { client } = require("../cleint/client");
+const { uploadToCloudinary } = require("../cleint/cloudinary");
 
 const createCategory = async (req, res) => {
   try {
-    const { name, icon } = req.body;
+    const body = req.body || {};
+    const name = (body.name || body.Name || body.category_name || body.categoryName || "")
+      .toString()
+      .trim();
+    const icon = body.icon || body.Icon || null;
 
     if (!name) {
       return res.status(400).json({
         success: false,
         message: "Category name is required.",
+        hint: "Send field 'name' as JSON {\"name\":\"...\"} or form-data key 'name' (Text).",
+        receivedKeys: Object.keys(body),
       });
     }
 
@@ -23,6 +30,11 @@ const createCategory = async (req, res) => {
       });
     }
 
+    let iconUrl = icon || null;
+    if (req.file) {
+      iconUrl = await uploadToCloudinary(req.file, "mind-soul/categories");
+    }
+
     const { rows } = await client.query(
       `
       INSERT INTO categories (name, icon)
@@ -35,7 +47,7 @@ const createCategory = async (req, res) => {
         total_ratings,
         created_at
       `,
-      [name, icon || null]
+      [name, iconUrl]
     );
 
     return res.status(201).json({
@@ -54,6 +66,26 @@ const createCategory = async (req, res) => {
 
 const getCategories = async (req, res) => {
   try {
+    const pageRaw = req.query.page;
+    const limitRaw = req.query.limit;
+
+    const page =
+      Number.isFinite(Number(pageRaw)) && Number(pageRaw) > 0
+        ? Number(pageRaw)
+        : 1;
+    const limit =
+      Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
+        ? Math.min(Number(limitRaw), 50)
+        : 10;
+
+    const offset = (page - 1) * limit;
+
+    const countResult = await client.query(
+      `SELECT COUNT(*)::int AS total FROM categories`
+    );
+
+    const totalCount = countResult.rows[0]?.total ?? 0;
+
     const { rows } = await client.query(
       `
       SELECT
@@ -65,12 +97,17 @@ const getCategories = async (req, res) => {
         created_at
       FROM categories
       ORDER BY created_at DESC
-      `
+      LIMIT $1 OFFSET $2
+      `,
+      [limit, offset]
     );
 
     return res.status(200).json({
       success: true,
       count: rows.length,
+      totalCount,
+      page,
+      limit,
       data: rows,
     });
   } catch (error) {
@@ -124,7 +161,7 @@ const getCategoryById = async (req, res) => {
 const updateCategory = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, icon } = req.body;
+    const { name, icon } = req.body || {};
 
     if (!id) {
       return res.status(400).json({
@@ -133,7 +170,12 @@ const updateCategory = async (req, res) => {
       });
     }
 
-    if (name === undefined && icon === undefined) {
+    let iconUrl = icon;
+    if (req.file) {
+      iconUrl = await uploadToCloudinary(req.file, "mind-soul/categories");
+    }
+
+    if (name === undefined && iconUrl === undefined) {
       return res.status(400).json({
         success: false,
         message: "Provide at least one field to update.",
@@ -175,9 +217,9 @@ const updateCategory = async (req, res) => {
       values.push(name);
     }
 
-    if (icon !== undefined) {
+    if (iconUrl !== undefined) {
       fields.push(`icon = $${index++}`);
-      values.push(icon);
+      values.push(iconUrl);
     }
 
     values.push(id);

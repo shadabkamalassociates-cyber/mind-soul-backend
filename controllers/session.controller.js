@@ -168,6 +168,20 @@ const getAllSessions = async (req, res) => {
   try {
     const { session_type, status } = req.query;
 
+    const pageRaw = req.query.page;
+    const limitRaw = req.query.limit;
+
+    const page =
+      Number.isFinite(Number(pageRaw)) && Number(pageRaw) > 0
+        ? Number(pageRaw)
+        : 1;
+    const limit =
+      Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
+        ? Math.min(Number(limitRaw), 50)
+        : 10;
+
+    const offset = (page - 1) * limit;
+
     const filters = [];
     const values = [];
     let index = 1;
@@ -185,19 +199,34 @@ const getAllSessions = async (req, res) => {
     const whereClause =
       filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
+    const countResult = await client.query(
+      `
+      SELECT COUNT(*)::int AS total
+      ${SESSION_JOINS}
+      ${whereClause}
+      `,
+      values
+    );
+
+    const totalCount = countResult.rows[0]?.total ?? 0;
+
     const { rows } = await client.query(
       `
       SELECT ${SESSION_RETURN}
       ${SESSION_JOINS}
       ${whereClause}
       ORDER BY s.created_at DESC
+      LIMIT $${index} OFFSET $${index + 1}
       `,
-      values
+      [...values, limit, offset]
     );
 
     return res.status(200).json({
       success: true,
       count: rows.length,
+      totalCount,
+      page,
+      limit,
       data: rows,
     });
   } catch (error) {
@@ -478,6 +507,184 @@ const deleteSessions = async (req, res) => {
     });
   }
 };
+
+const inviteUsers = async (req, res) => {
+  const { sessionId, userIds } = req.body;
+  const expertId = req.user.id;
+
+  try {
+
+      const session = await client.query(
+          `SELECT *
+           FROM sessions
+           WHERE id=$1
+           AND expert_id=$2
+           AND visibility='PRIVATE'`,
+          [sessionId, expertId]
+      );
+
+      if (session.rowCount === 0) {
+          return res.status(404).json({
+              success: false,
+              message: "Private session not found"
+          });
+      }
+
+      for (const userId of userIds) {
+
+          await client.query(
+              `INSERT INTO session_invites
+              (session_id,user_id,invited_by)
+              VALUES($1,$2,$3)
+              ON CONFLICT(session_id,user_id)
+              DO NOTHING`,
+              [sessionId,userId,expertId]
+          );
+      }
+
+      res.json({
+          success:true,
+          message:"Invitations sent."
+      });
+
+  } catch(err){
+      console.log(err);
+      res.status(500).json({
+          success:false,
+          message:"Server error"
+      });
+  }
+}
+
+const getMyInvites = async (req,res)=>{
+
+  const userId=req.user.id;
+
+  const result=await pool.query(`
+
+  SELECT
+  si.id,
+  si.status,
+
+  s.id as session_id,
+  s.title,
+  s.thumbnail,
+  s.price,
+  s.start_time,
+
+  u.first_name,
+  u.last_name
+
+  FROM session_invites si
+
+  JOIN sessions s
+  ON s.id=si.session_id
+
+  JOIN users u
+  ON u.id=s.expert_id
+
+  WHERE si.user_id=$1
+
+  ORDER BY si.invited_at DESC
+
+  `,[userId]);
+
+  res.json(result.rows);
+
+}
+
+const purchaseSession = async(req,res)=>{
+
+  const {sessionId,paymentId,amount}=req.body;
+
+  const userId=req.user.id;
+
+  // Verify payment here
+
+  await pool.query(
+
+  `INSERT INTO session_purchases
+  (
+  session_id,
+  user_id,
+  payment_id,
+  amount,
+  payment_status
+  )
+  VALUES($1,$2,$3,$4,'SUCCESS')
+
+  ON CONFLICT(session_id,user_id)
+
+  DO UPDATE SET
+
+  payment_status='SUCCESS',
+  payment_id=EXCLUDED.payment_id
+
+  `,
+  [sessionId,userId,paymentId,amount]
+  );
+
+  await pool.query(
+
+  `UPDATE session_invites
+
+  SET
+
+  status='ACCEPTED',
+  accepted_at=NOW()
+
+  WHERE session_id=$1
+  AND user_id=$2
+
+  `,
+  [sessionId,userId]
+
+  );
+
+  res.json({
+      success:true
+  });
+
+}
+const getSessionAccess = async(req,res)=>{
+
+  const sessionId=req.params.id;
+  const userId=req.user.id;
+  
+  const result=await pool.query(`
+  
+  SELECT
+  s.meeting_link,
+  s.recording_url,
+  sp.payment_status
+  
+  FROM sessions s
+  
+  JOIN session_purchases sp
+  
+  ON sp.session_id=s.id
+  
+  WHERE
+  
+  s.id=$1
+  AND sp.user_id=$2
+  AND sp.payment_status='SUCCESS'
+  
+  `,[sessionId,userId]);
+  
+  if(result.rowCount==0){
+  
+  return res.status(403).json({
+  success:false,
+  message:"Purchase required"
+  });
+  
+  }
+  
+  res.json(result.rows[0]);
+  
+  }
+
 
 module.exports = {
   createRecordedSession,

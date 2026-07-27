@@ -1,3 +1,4 @@
+const { client } = require("../cleint/client");
 
 const getUsers = async (req, res) => {
   try {
@@ -23,7 +24,7 @@ const getUsers = async (req, res) => {
       ORDER BY created_at DESC;
     `;
 
-    const { rows } = await pool.query(query);
+    const { rows } = await client.query(query);
 
     return res.status(200).json({
       success: true,

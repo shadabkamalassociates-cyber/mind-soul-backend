@@ -70,9 +70,10 @@ const createSession = async (req, res, session_type) => {
       price,
       language,
       max_participants,
+      session_type,
       status,
     } = req.body;
-
+    console.log(req.body);
     if (!expert_id || !category_id || !title) {
       return res.status(400).json({
         success: false,
@@ -160,7 +161,7 @@ const createSession = async (req, res, session_type) => {
 };
 
 const createRecordedSession = (req, res) =>
-  createSession(req, res, "RECORDED");
+  createSession(req, res);
 
 const createLiveSession = (req, res) => createSession(req, res, "LIVE");
 

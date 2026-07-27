@@ -148,7 +148,7 @@ const addToCart = async (req, res) => {
   const db = await client.connect();
 
   try {
-    const userId = req.user.id || "90f44537-b388-44da-9909-549b65c91982";
+    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
     const { session_id, quantity = 1, discount = 0, metadata = null } = req.body;
 
     if (!session_id) {
@@ -161,30 +161,30 @@ const addToCart = async (req, res) => {
     const qty = Math.max(1, parseInt(quantity, 10) || 1);
     const itemDiscount = roundMoney(discount);
 
-    // const sessionResult = await db.query(
-    //   `
-    //   SELECT id, price, title, status
-    //   FROM sessions
-    //   WHERE id = $1
-    //   `,
-    //   [session_id]
-    // );
+    const sessionResult = await db.query(
+      `
+      SELECT id, price, title, status
+      FROM sessions
+      WHERE id = $1
+      `,
+      [session_id]
+    );
 
-    // if (!sessionResult.rows.length) {
-    //   return res.status(404).json({
-    //     success: false,
-    //     message: "Session not found.",
-    //   });
-    // }
+    if (!sessionResult.rows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found.",
+      });
+    }
 
-    // const session = sessionResult.rows[0];
+    const session = sessionResult.rows[0];
 
-    // if (session.status === "CANCELLED") {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message: "Cannot add a cancelled session to cart.",
-    //   });
-    // }
+    if (session.status === "CANCELLED") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot add a cancelled session to cart.",
+      });
+    }
 
     const alreadyPurchased = await db.query(
       `
@@ -269,7 +269,7 @@ const addToCart = async (req, res) => {
 
 const getCart = async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
     const cart = await getOrCreateActiveCart(client, userId);
     const fullCart = await getCartWithItems(client, cart.id);
 
@@ -405,7 +405,7 @@ const clearCart = async (req, res) => {
   const db = await client.connect();
 
   try {
-    const userId = req.user.id;
+    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
 
     await db.query("BEGIN");
 

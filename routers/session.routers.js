@@ -12,8 +12,8 @@ const {
 
 const sessionRouter = express.Router();
 
-sessionRouter.post("/recorded/create", createRecordedSession);
-sessionRouter.post("/live/create", createLiveSession);
+sessionRouter.post("/create", createRecordedSession);
+// sessionRouter.post("/live/create", createLiveSession);
 sessionRouter.get("/fetch-all", getAllSessions);
 sessionRouter.get("/fetch/:id", getSessionById);
 sessionRouter.get("/fetch-by-expert/:expert_id", getSessionsByExpertId);

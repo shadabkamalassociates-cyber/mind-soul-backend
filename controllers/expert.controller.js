@@ -76,7 +76,7 @@ LEFT JOIN expert_categories ec
     ON ec.user_id = u.id
 
 LEFT JOIN categories c
-    ON c.id = ec.category_id
+    ON c.id::text = ec.category_id::text
 
 LEFT JOIN LATERAL (
     SELECT status, reason, verified_at, verified_by

@@ -88,35 +88,119 @@ const createBlog = async (req, res) => {
  */
 const getBlogs = async (req, res) => {
     try {
+        const { category_id, slug } = req.query;
 
-        const result = await client.query(`
+        console.log("========== GET BLOGS ==========");
+        console.log("category_id:", category_id);
+        console.log("slug:", slug);
+
+        let query = `
             SELECT
                 b.*,
-                c.name AS category,
-                a.full_name AS author
-            FROM blogs b
-            LEFT JOIN blog_categories c
-            ON b.category_id=c.id
-            LEFT JOIN blog_authors a
-            ON b.author_id=a.id
-            ORDER BY b.created_at DESC
-        `);
 
-        res.json({
+                CASE
+                    WHEN c.uuid IS NOT NULL THEN
+                        json_build_object(
+                            'uuid', c.uuid,
+                            'name', c.name,
+                            'slug', c.slug,
+                            'description', c.description,
+                            'image_url', c.image_url,
+                            'status', c.status
+                        )
+                    ELSE NULL
+                END AS category,
+
+                CASE
+                    WHEN a.id IS NOT NULL THEN
+                        json_build_object(
+                            'id', a.id,
+                            'full_name', a.full_name
+                        )
+                    ELSE NULL
+                END AS author
+
+            FROM blogs b
+
+            LEFT JOIN blog_categories c
+                ON b.category_id = c.uuid
+
+            LEFT JOIN blog_authors a
+                ON b.author_id = a.id
+        `;
+
+        const conditions = [];
+        const values = [];
+
+        // Filter by category UUID
+        if (category_id) {
+            values.push(category_id);
+
+            conditions.push(
+                `b.category_id = $${values.length}`
+            );
+        }
+
+        // Filter by blog slug
+        if (slug) {
+            values.push(slug);
+
+            conditions.push(
+                `b.slug = $${values.length}`
+            );
+        }
+
+        // Add WHERE only when filters exist
+        if (conditions.length > 0) {
+            query += `
+                WHERE ${conditions.join(" AND ")}
+            `;
+        }
+
+        query += `
+            ORDER BY b.created_at DESC
+        `;
+
+        console.log("SQL:", query);
+        console.log("Values:", values);
+
+        const result = await client.query(query, values);
+
+        // Blog slug is unique, so return one object
+        if (slug) {
+            if (result.rowCount === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Blog not found"
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: result.rows[0]
+            });
+        }
+
+        // Otherwise return list
+        return res.status(200).json({
             success: true,
             count: result.rowCount,
             data: result.rows
         });
 
     } catch (err) {
-        res.status(500).json({
+        console.error("========== GET BLOGS ERROR ==========");
+        console.error("Message:", err.message);
+        console.error("Code:", err.code);
+        console.error("Detail:", err.detail);
+        console.error("Stack:", err.stack);
+
+        return res.status(500).json({
             success: false,
             message: err.message
         });
     }
 };
-
-
 /**
  * Get Blog By Slug
  */

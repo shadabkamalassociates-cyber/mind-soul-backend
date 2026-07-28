@@ -1,10 +1,33 @@
 const bcrypt = require("bcrypt");
+const axios = require("axios");
 const { client } = require("../cleint/client");
 const { generateToken } = require("./common/generateToken");
 const {
   uploadToCloudinary,
   uploadMultipleToCloudinary,
 } = require("../cleint/cloudinary");
+
+const OTP_EXPIRY_MS = 10 * 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const WHATSAPP_OTP_WEBHOOK_ID =
+  process.env.WHATSAPP_OTP_WEBHOOK_ID || "67722d68ea04d946eaf743ac";
+
+const otpStore = new Map();
+
+const normalizePhone = (phone) => {
+  const digits = String(phone).replace(/\D/g, "");
+
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
+
+  return digits;
+};
+
+const sendOtpViaWhatsApp = async (mobileNumber, otp) => {
+  const whatsappUrl = `https://webhooks.wappblaster.com/webhook/${WHATSAPP_OTP_WEBHOOK_ID}?number=91${mobileNumber}&otp=${otp}`;
+  await axios.post(whatsappUrl);
+};
 
 const parseLanguages = (languages) => {
   if (!languages) return null;
@@ -306,7 +329,29 @@ const register = async (req, res) => {
     db.release();
   }
 };
+const checkAuth = async (req, res) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized.",
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "User authenticated successfully.",
+      data: user,
+    });
 
+  } catch (err) {
+    console.error("Check Auth Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Internal Server Error",
+    });
+  }
+};
 const login = async (req, res) => {
   try {
     const { phone, password } = req.body;
@@ -389,7 +434,73 @@ const login = async (req, res) => {
   }
 };
 
+
+const sendOtp = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone is required.",
+      });
+    }
+
+    const mobileNumber = normalizePhone(phone);
+    if (mobileNumber.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number must be 10 digits.",
+      });
+    }
+
+    const now = Date.now();
+    const existingOtp = otpStore.get(mobileNumber);
+
+    if (
+      existingOtp?.lastSentAt &&
+      now - existingOtp.lastSentAt < OTP_RESEND_COOLDOWN_MS
+    ) {
+      return res.status(429).json({
+        success: false,
+        message: "Please wait a minute before requesting another OTP.",
+      });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+
+    otpStore.set(mobileNumber, {
+      hashedOtp,
+      expiry: now + OTP_EXPIRY_MS,
+      lastSentAt: now,
+    });
+
+    try {
+      await sendOtpViaWhatsApp(mobileNumber, otp);
+    } catch (whatsappError) {
+      otpStore.delete(mobileNumber);
+      console.error("Error sending OTP via WhatsApp:", whatsappError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP. Please try again later.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully via WhatsApp.",
+    });
+  } catch (error) {
+    console.error("Send OTP Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
 module.exports = {
   register,
   login,
+  checkAuth,
+  sendOtp,
 };

@@ -269,7 +269,7 @@ const addToCart = async (req, res) => {
 
 const getCart = async (req, res) => {
   try {
-    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
+    const userId =  "507fb954-65b8-4aa0-87a5-97df36d5926f";
     const cart = await getOrCreateActiveCart(client, userId);
     const fullCart = await getCartWithItems(client, cart.id);
 

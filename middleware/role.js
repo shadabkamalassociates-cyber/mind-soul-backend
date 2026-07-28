@@ -22,7 +22,7 @@ const auth = (req, res, next) => {
       header && header.startsWith("Bearer ") ? header.split(" ")[1] : null;
     const cookieToken = req.cookies?.token;
     const token = bearerToken || cookieToken;
-
+    console.log(token);
     if (!token) {
       return res.status(401).json({
         success: false,

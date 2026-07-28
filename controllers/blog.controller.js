@@ -1,3 +1,5 @@
+const { client } = require("../cleint/client");
+const { uploadToCloudinary } = require("../cleint/cloudinary");
 
 const createBlog = async (req, res) => {
     try {
@@ -8,8 +10,6 @@ const createBlog = async (req, res) => {
             slug,
             short_description,
             content,
-            featured_image,
-            banner_image,
             status,
             is_featured,
             meta_title,
@@ -17,6 +17,14 @@ const createBlog = async (req, res) => {
             meta_keywords,
             published_at
         } = req.body;
+
+        const featuredImageFile = req.files?.featured_image?.[0] || null;
+        const bannerImageFile = req.files?.banner_image?.[0] || null;
+
+        const [featured_image, banner_image] = await Promise.all([
+            uploadToCloudinary(featuredImageFile, "mind-soul/blogs/featured"),
+            uploadToCloudinary(bannerImageFile, "mind-soul/blogs/banner"),
+        ]);
 
         const query = `
             INSERT INTO blogs(
@@ -58,7 +66,7 @@ const createBlog = async (req, res) => {
             published_at
         ];
 
-        const result = await db.query(query, values);
+        const result = await client.query(query, values);
 
         res.status(201).json({
             success: true,
@@ -81,7 +89,7 @@ const createBlog = async (req, res) => {
 const getBlogs = async (req, res) => {
     try {
 
-        const result = await db.query(`
+        const result = await client.query(`
             SELECT
                 b.*,
                 c.name AS category,
@@ -118,7 +126,7 @@ const getBlogBySlug = async (req, res) => {
 
         const { slug } = req.params;
 
-        const result = await db.query(
+        const result = await client.query(
             `
             SELECT
                 b.*,
@@ -141,7 +149,7 @@ const getBlogBySlug = async (req, res) => {
             });
         }
 
-        await db.query(
+        await client.query(
             "UPDATE blogs SET views=views+1 WHERE slug=$1",
             [slug]
         );
@@ -189,7 +197,27 @@ const updateBlog = async (req, res) => {
             published_at
         } = req.body;
 
-        const result = await db.query(
+        const featuredImageFile = req.files?.featured_image?.[0] || null;
+        const bannerImageFile = req.files?.banner_image?.[0] || null;
+
+        let featuredImageUrl = featured_image || null;
+        let bannerImageUrl = banner_image || null;
+
+        if (featuredImageFile) {
+            featuredImageUrl = await uploadToCloudinary(
+                featuredImageFile,
+                "mind-soul/blogs/featured"
+            );
+        }
+
+        if (bannerImageFile) {
+            bannerImageUrl = await uploadToCloudinary(
+                bannerImageFile,
+                "mind-soul/blogs/banner"
+            );
+        }
+
+        const result = await client.query(
             `
             UPDATE blogs
             SET
@@ -218,8 +246,8 @@ const updateBlog = async (req, res) => {
                 slug,
                 short_description,
                 content,
-                featured_image,
-                banner_image,
+                featuredImageUrl,
+                bannerImageUrl,
                 status,
                 is_featured,
                 meta_title,
@@ -256,7 +284,7 @@ const deleteBlog = async (req, res) => {
 
         const { id } = req.params;
 
-        await db.query(
+        await client.query(
             "DELETE FROM blogs WHERE id=$1",
             [id]
         );
@@ -287,7 +315,7 @@ const createCategory = async (req, res) => {
             status
         } = req.body;
 
-        const exists = await db.query(
+        const exists = await client.query(
             "SELECT id FROM blog_categories WHERE LOWER(name)=LOWER($1)",
             [name]
         );
@@ -299,7 +327,7 @@ const createCategory = async (req, res) => {
             });
         }
 
-        const result = await db.query(
+        const result = await client.query(
             `INSERT INTO blog_categories
             (name, slug, description, image_url, status)
             VALUES($1,$2,$3,$4,$5)
@@ -335,7 +363,7 @@ const getCategories = async (req, res) => {
 
     try {
 
-        const result = await db.query(`
+        const result = await client.query(`
             SELECT
                 bc.*,
                 COUNT(b.id)::INT AS total_blogs
@@ -373,7 +401,7 @@ const getCategoryById = async (req, res) => {
 
         const { id } = req.params;
 
-        const result = await db.query(
+        const result = await client.query(
             "SELECT * FROM blog_categories WHERE id=$1",
             [id]
         );
@@ -419,7 +447,7 @@ const updateCategory = async (req, res) => {
             status
         } = req.body;
 
-        const result = await db.query(
+        const result = await client.query(
             `
             UPDATE blog_categories
             SET
@@ -476,7 +504,7 @@ const deleteCategory = async (req, res) => {
 
         const { id } = req.params;
 
-        const blogCheck = await db.query(
+        const blogCheck = await client.query(
             "SELECT COUNT(*) FROM blogs WHERE category_id=$1",
             [id]
         );
@@ -488,7 +516,7 @@ const deleteCategory = async (req, res) => {
             });
         }
 
-        const result = await db.query(
+        const result = await client.query(
             "DELETE FROM blog_categories WHERE id=$1 RETURNING *",
             [id]
         );
@@ -526,7 +554,7 @@ const getBlogsByCategory = async (req, res) => {
 
         const { slug } = req.params;
 
-        const result = await db.query(
+        const result = await client.query(
             `
             SELECT
                 b.id,

@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
 const authRouter = require('./routers/auth.routers');
@@ -11,12 +12,19 @@ const ratingRouter = require('./routers/rating.routers');
 const sessionRouter = require('./routers/session.routers');
 const paymentRouter = require('./routers/payment.routers');
 const blogRouter = require('./routers/blog.routers');
+const sessionBookingRouter = require('./routers/bookingSession.router');
 const app = express();
 dotenv.config();
 const PORT = process.env.PORT || 3000;
 
 
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    credentials: true,
+  })
+);
+app.use(cookieParser());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -37,6 +45,7 @@ app.use('/api/categories', categoryRouter);
 app.use('/api/ratings', ratingRouter);
 app.use('/api/sessions', sessionRouter);
 app.use('/api/payment', paymentRouter);
+app.use('/api/session-purchase', sessionBookingRouter);
 app.use('/api/blogs', blogRouter);
 
 app.listen(PORT, () => {console.log(`Server is running on port ${PORT}`)});

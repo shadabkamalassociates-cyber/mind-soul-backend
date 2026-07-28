@@ -1,14 +1,15 @@
 const express = require("express");
 const { createBlog, getBlogs, getBlogBySlug, updateBlog, deleteBlog, deleteCategory, getBlogsByCategory } = require("../controllers/blog.controller");
 const { auth } = require("../middleware/role");
+const { blogUpload } = require("../middleware/upload");
 const { createCategory, getCategories, getCategoryById, updateCategory } = require("../controllers/category.controller");
 const blogRouter = express.Router();
 
 
-blogRouter.post("/create", auth,createBlog);
+blogRouter.post("/create", auth, blogUpload, createBlog);
 blogRouter.get("/get-all",getBlogs);
 blogRouter.get("/fetch-by-slug/:slug", getBlogBySlug);
-blogRouter.put("/update-blog/:id",auth, updateBlog);
+blogRouter.put("/update-blog/:id", auth, blogUpload, updateBlog);
 blogRouter.delete("/delete-blog/:id",auth, deleteBlog);
 blogRouter.post("/create-category",auth, createCategory);
 blogRouter.get("/get-categories",getCategories);

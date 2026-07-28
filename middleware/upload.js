@@ -39,7 +39,13 @@ const signupUpload = upload.fields([
   { name: "documents", maxCount: 10 },
 ]);
 
+const blogUpload = upload.fields([
+  { name: "featured_image", maxCount: 1 },
+  { name: "banner_image", maxCount: 1 },
+]);
+
 module.exports = {
   upload,
   signupUpload,
+  blogUpload,
 };

@@ -7,7 +7,7 @@ const { auth } = require("../middleware/role");
 
 const sessionBookingRouter = express.Router();
 
-sessionBookingRouter.post("/create", auth, createSessionPurchase);
+sessionBookingRouter.post("/create",  createSessionPurchase);
 sessionBookingRouter.post("/verify-payment", auth, verifyPayment);
 
 module.exports = sessionBookingRouter;

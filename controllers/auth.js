@@ -4,7 +4,6 @@ const { client } = require("../cleint/client");
 const { generateToken } = require("./common/generateToken");
 const {
   uploadToCloudinary,
-  uploadMultipleToCloudinary,
 } = require("../cleint/cloudinary");
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000;
@@ -55,20 +54,17 @@ const parseLanguages = (languages) => {
   return null;
 };
 
-const buildCertificationsValue = (certifications, documentUrls = []) => {
-  const text =
-    typeof certifications === "string" && certifications.trim()
-      ? certifications.trim()
-      : null;
-
-  if (!documentUrls.length) {
-    return text;
+const parseCertifications = (certifications) => {
+  if (certifications === undefined || certifications === null) {
+    return null;
   }
 
-  return JSON.stringify({
-    description: text,
-    documents: documentUrls,
-  });
+  if (typeof certifications === "string") {
+    const trimmed = certifications.trim();
+    return trimmed || null;
+  }
+
+  return String(certifications).trim() || null;
 };
 
 const isProfileCompleted = (payload, role) => {
@@ -152,26 +148,18 @@ const register = async (req, res) => {
       }
     }
 
-    // Upload files to Cloudinary when present
+    // Upload profile/cover images to Cloudinary when present
     const profileImageFile = req.files?.profile_image?.[0] || null;
     const coverImageFile = req.files?.cover_image?.[0] || null;
-    const documentFiles = req.files?.documents || [];
 
-    const [profile_image, cover_image, documentUrls] = await Promise.all([
+    const [profile_image, cover_image] = await Promise.all([
       uploadToCloudinary(profileImageFile, `mind-soul/${role.toLowerCase()}/profile`),
       uploadToCloudinary(coverImageFile, `mind-soul/${role.toLowerCase()}/cover`),
-      uploadMultipleToCloudinary(
-        documentFiles,
-        `mind-soul/${role.toLowerCase()}/documents`
-      ),
     ]);
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const languagesArray = parseLanguages(languages);
-    const certificationsValue = buildCertificationsValue(
-      certifications,
-      documentUrls.filter(Boolean)
-    );
+    const certificationsValue = parseCertifications(certifications);
 
     const payload = {
       professional_title,
@@ -312,10 +300,7 @@ const register = async (req, res) => {
       success: true,
       message: "Registration successful.",
       token,
-      data: {
-        ...user,
-        documents: documentUrls.filter(Boolean),
-      },
+      data: user,
     });
   } catch (err) {
     await db.query("ROLLBACK");
@@ -332,16 +317,29 @@ const register = async (req, res) => {
 const checkAuth = async (req, res) => {
   try {
     const user = req.user;
-    if (!user) {
+
+    const result = await client.query(
+      `
+      SELECT *
+      FROM users
+      WHERE id = $1
+      `,
+      [user.id]
+    );
+
+    if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized.",
       });
     }
+
+    const userData = result.rows[0];
+    console.log("userData++++++++++++++++", userData);
     return res.status(200).json({
       success: true,
       message: "User authenticated successfully.",
-      data: user,
+      data: userData,
     });
 
   } catch (err) {

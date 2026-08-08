@@ -12,6 +12,7 @@ const ratingRouter = require('./routers/rating.routers');
 const sessionRouter = require('./routers/session.routers');
 const paymentRouter = require('./routers/payment.routers');
 const blogRouter = require('./routers/blog.routers');
+const communityRouter = require('./routers/community.routers');
 const sessionBookingRouter = require('./routers/bookingSession.router');
 const app = express();
 dotenv.config();
@@ -20,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(
   cors({
-    origin: ['http://localhost:3003', 'http://localhost:5173', 'http://localhost:3000'],
+    origin: ['http://localhost:3003', 'http://localhost:5174', 'http://localhost:3000','https://crm.cultcoder.com','https://cosmicguruji.com'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -47,6 +48,7 @@ app.use('/api/categories', categoryRouter);
 app.use('/api/ratings', ratingRouter);
 app.use('/api/sessions', sessionRouter);
 app.use('/api/payment', paymentRouter);
+app.use('/api/community', communityRouter);
 app.use('/api/session-purchase', sessionBookingRouter);
 app.use('/api/blogs', blogRouter);
 

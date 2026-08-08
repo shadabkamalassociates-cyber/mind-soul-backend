@@ -148,7 +148,7 @@ const addToCart = async (req, res) => {
   const db = await client.connect();
 
   try {
-    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
+    const userId = req.user.id;
     const { session_id, quantity = 1, discount = 0, metadata = null } = req.body;
 
     if (!session_id) {
@@ -215,16 +215,18 @@ const addToCart = async (req, res) => {
       INSERT INTO cart_items
       (
         cart_id,
+        user_id,
         session_id,
+        quantity,
         unit_price,
         discount,
         final_price,
         metadata
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (cart_id, session_id)
       DO UPDATE SET
-        
+        quantity = EXCLUDED.quantity,
         unit_price = EXCLUDED.unit_price,
         discount = EXCLUDED.discount,
         final_price = EXCLUDED.final_price,
@@ -233,8 +235,9 @@ const addToCart = async (req, res) => {
       `,
       [
         cart.id,
+        userId,
         session_id,
-      
+        qty,
         unitPrice,
         itemDiscount,
         finalPrice,
@@ -267,24 +270,139 @@ const addToCart = async (req, res) => {
   }
 };
 
+
 const getCart = async (req, res) => {
   try {
-    const userId =  "507fb954-65b8-4aa0-87a5-97df36d5926f";
-    const cart = await getOrCreateActiveCart(client, userId);
-    const fullCart = await getCartWithItems(client, cart.id);
+    // You can take user_id from query:
+    // GET /cart?user_id=<uuid>
+    const user_id = req.user.id;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required",
+      });
+    }
+
+    const query = `
+      SELECT
+        c.id,
+        c.user_id,
+        c.subtotal,
+        c.discount,
+        c.tax,
+        c.total,
+        c.status,
+        c.created_at,
+        c.updated_at,
+
+        COALESCE(
+          jsonb_agg(
+            jsonb_build_object(
+
+              'cart_item_id', ci.id,
+              'quantity', ci.quantity,
+              'unit_price', ci.unit_price,
+              'discount', ci.discount,
+              'final_price', ci.final_price,
+              'metadata', ci.metadata,
+              'created_at', ci.created_at,
+
+              'session',
+              jsonb_build_object(
+                'id', s.id,
+                'expert_id', s.expert_id,
+                'title', s.title,
+                'description', s.description,
+                'session_type', s.session_type,
+                'thumbnail', s.thumbnail,
+                'video_url', s.video_url,
+                'meeting_link', s.meeting_link,
+                'start_time', s.start_time,
+                'end_time', s.end_time,
+                'duration_minutes', s.duration_minutes,
+                'price', s.price,
+                'language', s.language,
+                'max_participants', s.max_participants,
+                'status', s.status,
+                'is_published', s.is_published,
+                'created_at', s.created_at,
+                'updated_at', s.updated_at
+              )
+            )
+            ORDER BY ci.created_at DESC
+          ) FILTER (WHERE ci.id IS NOT NULL),
+          '[]'::jsonb
+        ) AS items
+
+      FROM carts c
+
+      LEFT JOIN cart_items ci
+        ON ci.cart_id = c.id
+
+      LEFT JOIN sessions s
+        ON s.id = ci.session_id
+
+      WHERE c.user_id = $1
+        AND c.status = 'ACTIVE'
+
+      GROUP BY c.id
+
+      ORDER BY c.created_at DESC
+
+      LIMIT 1
+    `;
+
+    console.log("Fetching cart for user:", user_id);
+
+    const { rows } = await client.query(query, [user_id]);
+
+    if (rows.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "Cart is empty",
+        data: null,
+      });
+    }
 
     return res.status(200).json({
       success: true,
-      data: fullCart,
+      itemCount: rows[0].items.length,
+      data: rows[0],
     });
+
   } catch (error) {
-    console.error("Get Cart Error:", error);
+    console.error("Get User Cart Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
+      error: error.message,
     });
   }
 };
+
+
+
+
+// const getCart = async (req, res) => {
+//   try {
+//     const userId =  "507fb954-65b8-4aa0-87a5-97df36d5926f";
+//     const cart = await getOrCreateActiveCart(client, userId);
+//     const fullCart = await getCartWithItems(client, cart.id);
+
+//     return res.status(200).json({
+//       success: true,
+//       data: fullCart,
+//     });
+//   } catch (error) {
+//     console.error("Get Cart Error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Internal Server Error",
+//     });
+//   }
+// };
 
 const updateCartItem = async (req, res) => {
   const db = await client.connect();
@@ -401,11 +519,42 @@ const updateCartItem = async (req, res) => {
   }
 };
 
+const removePurchasedSessionFromCart = async (db, userId, sessionId) => {
+  const cartResult = await db.query(
+    `
+    SELECT id
+    FROM carts
+    WHERE user_id = $1
+      AND status = 'ACTIVE'
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  if (!cartResult.rows.length) return;
+
+  const cartId = cartResult.rows[0].id;
+
+  await db.query(
+    `DELETE FROM cart_items WHERE cart_id = $1 AND session_id = $2`,
+    [cartId, sessionId]
+  );
+
+  await recalculateCartTotals(db, cartId);
+};
+
 const clearCart = async (req, res) => {
   const db = await client.connect();
 
   try {
-    const userId = req.user.id || "507fb954-65b8-4aa0-87a5-97df36d5926f";
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. Token required.",
+      });
+    }
 
     await db.query("BEGIN");
 
@@ -646,6 +795,7 @@ const getMyPurchases = async (req, res) => {
         sp.payment_id,
         sp.amount,
         sp.payment_status,
+        sp.purchase_status,
         sp.access_status,
         sp.purchased_at,
         s.title,
@@ -702,6 +852,7 @@ const getPurchaseDetails = async (req, res) => {
         sp.payment_id,
         sp.amount,
         sp.payment_status,
+        sp.purchase_status,
         sp.access_status,
         sp.purchased_at,
         s.title,
@@ -758,6 +909,7 @@ module.exports = {
   getCart,
   updateCartItem,
   clearCart,
+  removePurchasedSessionFromCart,
   checkout,
   getMyPurchases,
   getPurchaseDetails,

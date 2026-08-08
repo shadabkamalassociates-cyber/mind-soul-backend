@@ -1,6 +1,27 @@
 const { client } = require("../cleint/client");
 const { uploadToCloudinary } = require("../cleint/cloudinary");
 
+const parseBoolean = (value, defaultValue = false) => {
+    if (value === true || value === "true" || value === "1") {
+        return true;
+    }
+
+    if (value === false || value === "false" || value === "0") {
+        return false;
+    }
+
+    return defaultValue;
+};
+
+const parseOptionalInt = (value) => {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
 const createBlog = async (req, res) => {
     try {
         const {
@@ -50,8 +71,8 @@ const createBlog = async (req, res) => {
         `;
 
         const values = [
-            category_id,
-            author_id,
+            category_id || null,
+            parseOptionalInt(author_id),
             title,
             slug,
             short_description,
@@ -59,11 +80,11 @@ const createBlog = async (req, res) => {
             featured_image,
             banner_image,
             status || "draft",
-            is_featured || false,
-            meta_title,
-            meta_description,
-            meta_keywords,
-            published_at
+            parseBoolean(is_featured, false),
+            meta_title || null,
+            meta_description || null,
+            meta_keywords || null,
+            published_at || null
         ];
 
         const result = await client.query(query, values);
@@ -218,7 +239,7 @@ const getBlogBySlug = async (req, res) => {
                 a.full_name author
             FROM blogs b
             LEFT JOIN blog_categories c
-            ON b.category_id=c.id
+            ON b.category_id = c.uuid
             LEFT JOIN blog_authors a
             ON b.author_id=a.id
             WHERE b.slug=$1
@@ -324,8 +345,8 @@ const updateBlog = async (req, res) => {
             RETURNING *;
             `,
             [
-                category_id,
-                author_id,
+                category_id || null,
+                parseOptionalInt(author_id),
                 title,
                 slug,
                 short_description,
@@ -333,11 +354,11 @@ const updateBlog = async (req, res) => {
                 featuredImageUrl,
                 bannerImageUrl,
                 status,
-                is_featured,
-                meta_title,
-                meta_description,
-                meta_keywords,
-                published_at,
+                parseBoolean(is_featured, false),
+                meta_title || null,
+                meta_description || null,
+                meta_keywords || null,
+                published_at || null,
                 id
             ]
         );
@@ -389,7 +410,7 @@ const deleteBlog = async (req, res) => {
 
 };
 
-const createCategory = async (req, res) => {
+const createCategoryForBlog = async (req, res) => {
     try {
         const {
             name,
@@ -411,6 +432,14 @@ const createCategory = async (req, res) => {
             });
         }
 
+        let imageUrl = image_url || null;
+        if (req.file) {
+            imageUrl = await uploadToCloudinary(
+                req.file,
+                "mind-soul/blogs/categories"
+            );
+        }
+
         const result = await client.query(
             `INSERT INTO blog_categories
             (name, slug, description, image_url, status)
@@ -420,7 +449,7 @@ const createCategory = async (req, res) => {
                 name,
                 slug,
                 description,
-                image_url,
+                imageUrl,
                 status ?? true
             ]
         );
@@ -443,7 +472,7 @@ const createCategory = async (req, res) => {
 /**
  * Get All Categories
  */
-const getCategories = async (req, res) => {
+const getCategoriesForBlog = async (req, res) => {
 
     try {
 
@@ -453,7 +482,7 @@ const getCategories = async (req, res) => {
                 COUNT(b.id)::INT AS total_blogs
             FROM blog_categories bc
             LEFT JOIN blogs b
-            ON bc.id=b.category_id
+            ON bc.uuid = b.category_id
             GROUP BY bc.id
             ORDER BY bc.name ASC
         `);
@@ -479,7 +508,7 @@ const getCategories = async (req, res) => {
 /**
  * Get Category By ID
  */
-const getCategoryById = async (req, res) => {
+const getCategoryByIdForBlog = async (req, res) => {
 
     try {
 
@@ -517,7 +546,7 @@ const getCategoryById = async (req, res) => {
 /**
  * Update Category
  */
-const updateCategory = async (req, res) => {
+const updateCategoryForBlog = async (req, res) => {
 
     try {
 
@@ -530,6 +559,14 @@ const updateCategory = async (req, res) => {
             image_url,
             status
         } = req.body;
+
+        let imageUrl = image_url || null;
+        if (req.file) {
+            imageUrl = await uploadToCloudinary(
+                req.file,
+                "mind-soul/blogs/categories"
+            );
+        }
 
         const result = await client.query(
             `
@@ -548,7 +585,7 @@ const updateCategory = async (req, res) => {
                 name,
                 slug,
                 description,
-                image_url,
+                imageUrl,
                 status,
                 id
             ]
@@ -582,14 +619,16 @@ const updateCategory = async (req, res) => {
 /**
  * Delete Category
  */
-const deleteCategory = async (req, res) => {
+const deleteCategoryForBlog = async (req, res) => {
 
     try {
 
         const { id } = req.params;
 
         const blogCheck = await client.query(
-            "SELECT COUNT(*) FROM blogs WHERE category_id=$1",
+            `SELECT COUNT(*) FROM blogs b
+             INNER JOIN blog_categories bc ON b.category_id = bc.uuid
+             WHERE bc.id = $1`,
             [id]
         );
 
@@ -632,7 +671,7 @@ const deleteCategory = async (req, res) => {
 /**
  * Get Blogs By Category Slug
  */
-const getBlogsByCategory = async (req, res) => {
+const getBlogsByCategoryForBlog = async (req, res) => {
 
     try {
 
@@ -650,7 +689,7 @@ const getBlogsByCategory = async (req, res) => {
                 a.full_name AS author
             FROM blogs b
             INNER JOIN blog_categories c
-                ON b.category_id=c.id
+                ON b.category_id = c.uuid
             LEFT JOIN blog_authors a
                 ON b.author_id=a.id
             WHERE c.slug=$1
@@ -682,10 +721,10 @@ module.exports = {
     getBlogBySlug,
     updateBlog,
     deleteBlog,
-    createCategory,
-    getCategories,
-    getCategoryById,
-    updateCategory,
-    deleteCategory,
-    getBlogsByCategory
+    createCategoryForBlog,
+    getCategoriesForBlog,
+    getCategoryByIdForBlog,
+    updateCategoryForBlog,
+    deleteCategoryForBlog,
+    getBlogsByCategoryForBlog
 };

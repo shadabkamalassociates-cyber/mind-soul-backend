@@ -254,12 +254,56 @@ const updateCategory = async (req, res) => {
   }
 };
 
+// const deleteCategories = async (req, res) => {
+//   try {
+//     const { ids } = req.body;
+//     const { id } = req.params;
+
+//     const deleteIds = ids || (id ? [Number(id)] : null);
+
+//     if (!Array.isArray(deleteIds) || deleteIds.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Provide category id or ids array.",
+//       });
+//     }
+
+//     const { rows } = await client.query(
+//       `
+//       DELETE FROM categories
+//       WHERE id = ANY($1::int[])
+//       RETURNING id
+//       `,
+//       [deleteIds]
+//     );
+
+//     if (rows.length === 0) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "No categories found for the given ids.",
+//       });
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: "Categories deleted successfully.",
+//       deletedCount: rows.length,
+//       deletedIds: rows.map((row) => row.id),
+//     });
+//   } catch (error) {
+//     console.error("Delete Categories Error:", error);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Internal Server Error",
+//     });
+//   }
+// };
 const deleteCategories = async (req, res) => {
   try {
-    const { ids } = req.body;
+    const ids = req.body?.ids;   // Safe even if req.body is undefined
     const { id } = req.params;
 
-    const deleteIds = ids || (id ? [Number(id)] : null);
+    const deleteIds = ids || (id ? [id] : null);
 
     if (!Array.isArray(deleteIds) || deleteIds.length === 0) {
       return res.status(400).json({
@@ -271,8 +315,8 @@ const deleteCategories = async (req, res) => {
     const { rows } = await client.query(
       `
       DELETE FROM categories
-      WHERE id = ANY($1::int[])
-      RETURNING id
+      WHERE id = ANY($1::uuid[])
+      RETURNING id;
       `,
       [deleteIds]
     );
@@ -280,7 +324,7 @@ const deleteCategories = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: "No categories found for the given ids.",
+        message: "No categories found.",
       });
     }
 
@@ -288,7 +332,7 @@ const deleteCategories = async (req, res) => {
       success: true,
       message: "Categories deleted successfully.",
       deletedCount: rows.length,
-      deletedIds: rows.map((row) => row.id),
+      deletedIds: rows.map((r) => r.id),
     });
   } catch (error) {
     console.error("Delete Categories Error:", error);
@@ -299,6 +343,7 @@ const deleteCategories = async (req, res) => {
   }
 };
 
+// delete category controller
 module.exports = {
   createCategory,
   getCategories,

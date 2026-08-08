@@ -1,146 +1,239 @@
 const { client } = require("../cleint/client");
+const { uploadToCloudinary } = require("../cleint/cloudinary");
+
+const parseLanguages = (languages) => {
+  if (languages === undefined) return undefined;
+  if (!languages) return null;
+
+  if (Array.isArray(languages)) {
+    return languages.filter(Boolean);
+  }
+
+  if (typeof languages === "string") {
+    try {
+      const parsed = JSON.parse(languages);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(Boolean);
+      }
+    } catch (_) {
+      // comma-separated fallback
+    }
+
+    return languages
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return null;
+};
+
+const parseCertifications = (certifications) => {
+  if (certifications === undefined) return undefined;
+  if (certifications === null) return null;
+
+  if (typeof certifications === "string") {
+    const trimmed = certifications.trim();
+    return trimmed || null;
+  }
+
+  return String(certifications).trim() || null;
+};
+
+const isProfileCompleted = (payload) => {
+  const required = [
+    payload.professional_title,
+    payload.profession,
+    payload.about,
+    payload.experience_years,
+  ];
+
+  return required.every(
+    (value) =>
+      value !== undefined && value !== null && String(value).trim() !== ""
+  );
+};
 
 const getExperts = async (req, res) => {
   try {
     const role = req.role;
+
     const status = req.query.status
       ? String(req.query.status).toUpperCase()
       : null;
 
+    const id = req.query.id
+      ? String(req.query.id)
+      : null;
+
     const allowedStatuses = ["PENDING", "VERIFIED", "REJECTED"];
 
-    if (status && !allowedStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `status must be one of: ${allowedStatuses.join(", ")}`,
-      });
-    }
+    // if (status && !allowedStatuses.includes(status)) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: `status must be one of: ${allowedStatuses.join(", ")}`,
+    //   });
+    // }
 
+    // Dynamic query parameters
     const values = [role];
-    let statusFilter = "";
+    const filters = [`u.role = $1`];
 
+    // Filter by status
     if (status) {
       values.push(status);
-      // Users with no verification row are treated as PENDING
-      statusFilter = `AND COALESCE(uv.status, 'PENDING') = $2`;
+
+      filters.push(
+        `COALESCE(uv.status, 'PENDING') = $${values.length}`
+      );
+    }
+
+    // Filter by user/expert ID
+    if (id) {
+      values.push(id);
+
+      filters.push(
+        `u.id = $${values.length}`
+      );
     }
 
     const query = `
-SELECT
-    u.id,
-    u.first_name,
-    u.last_name,
-    u.email,
-    u.phone,
-    u.role,
-    u.bio,
-    u.experience_years,
-    u.consultation_fee,
-    u.profile_image,
+      SELECT
+          u.id,
+          u.first_name,
+          u.last_name,
+          u.specialization,
+          u.email,
+          u.phone,
+          u.role,
+          u.bio,
+          u.experience_years,
+          u.consultation_fee,
+          u.profile_image,
 
-    CASE
-        WHEN ub.is_active = true THEN false
-        ELSE true
-    END AS is_active,
+          CASE
+              WHEN ub.is_active = true THEN false
+              ELSE true
+          END AS is_active,
 
-    COALESCE(uv.status, 'PENDING') AS verification_status,
-    uv.reason AS verification_reason,
-    uv.verified_at,
-    uv.verified_by,
+          COALESCE(uv.status, 'PENDING') AS verification_status,
+          uv.reason AS verification_reason,
+          uv.verified_at,
+          uv.verified_by,
 
-    CASE
-        WHEN COALESCE(uv.status, 'PENDING') = 'VERIFIED'
-        THEN true
-        ELSE false
-    END AS is_verified,
+          CASE
+              WHEN COALESCE(uv.status, 'PENDING') = 'VERIFIED'
+              THEN true
+              ELSE false
+          END AS is_verified,
 
-    u.average_rating,
-    u.total_reviews,
-    u.total_sessions,
-    u.created_at,
+          u.average_rating,
+          u.total_reviews,
+          u.total_sessions,
+          u.created_at,
 
-    COALESCE(
-        json_agg(
-            DISTINCT jsonb_build_object(
-                'id', c.id,
-                'name', c.name,
-                'icon', c.icon
-            )
-        ) FILTER (WHERE c.id IS NOT NULL),
-        '[]'
-    ) AS categories
+          COALESCE(
+              json_agg(
+                  DISTINCT jsonb_build_object(
+                      'id', c.id,
+                      'name', c.name,
+                      'icon', c.icon
+                  )
+              ) FILTER (WHERE c.id IS NOT NULL),
+              '[]'
+          ) AS categories
 
-FROM users u
+      FROM users u
 
-LEFT JOIN expert_categories ec
-    ON ec.user_id = u.id
+      LEFT JOIN expert_categories ec
+          ON ec.user_id = u.id
 
-LEFT JOIN categories c
-    ON c.id::text = ec.category_id::text
+      LEFT JOIN categories c
+          ON c.id::text = ec.category_id::text
 
-LEFT JOIN LATERAL (
-    SELECT status, reason, verified_at, verified_by
-    FROM user_verifications
-    WHERE user_id = u.id
-    ORDER BY created_at DESC
-    LIMIT 1
-) uv ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT
+              status,
+              reason,
+              verified_at,
+              verified_by
+          FROM user_verifications
+          WHERE user_id = u.id
+          ORDER BY created_at DESC
+          LIMIT 1
+      ) uv ON TRUE
 
-LEFT JOIN LATERAL (
-    SELECT is_active
-    FROM user_blocks
-    WHERE user_id = u.id
-    ORDER BY created_at DESC
-    LIMIT 1
-) ub ON TRUE
+      LEFT JOIN LATERAL (
+          SELECT is_active
+          FROM user_blocks
+          WHERE user_id = u.id
+          ORDER BY created_at DESC
+          LIMIT 1
+      ) ub ON TRUE
 
-WHERE u.role = $1
-${statusFilter}
+      WHERE ${filters.join(" AND ")}
 
-GROUP BY
-    u.id,
-    u.first_name,
-    u.last_name,
-    u.email,
-    u.phone,
-    u.role,
-    u.bio,
-    u.experience_years,
-    u.consultation_fee,
-    u.profile_image,
-    ub.is_active,
-    uv.status,
-    uv.reason,
-    uv.verified_at,
-    uv.verified_by,
-    u.average_rating,
-    u.total_reviews,
-    u.total_sessions,
-    u.created_at
+      GROUP BY
+          u.id,
+          u.first_name,
+          u.last_name,
+          u.specialization,
+          u.email,
+          u.phone,
+          u.role,
+          u.bio,
+          u.experience_years,
+          u.consultation_fee,
+          u.profile_image,
+          ub.is_active,
+          uv.status,
+          uv.reason,
+          uv.verified_at,
+          uv.verified_by,
+          u.average_rating,
+          u.total_reviews,
+          u.total_sessions,
+          u.created_at
 
-ORDER BY u.created_at DESC;
-`;
+      ORDER BY u.created_at DESC;
+    `;
+
+    console.log("GET EXPERTS QUERY:", query);
+    console.log("QUERY VALUES:", values);
 
     const { rows } = await client.query(query, values);
+
+    // If ID provided and expert doesn't exist
+    if (id && rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Expert not found",
+      });
+    }
 
     return res.status(200).json({
       success: true,
       count: rows.length,
+
       filter: {
         role,
         status: status || "ALL",
+        id: id || null,
       },
-      data: rows,
+
+      // ID means we're requesting one expert
+      data: id ? rows[0] : rows,
     });
+
   } catch (error) {
     console.error("Get Experts Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
     });
   }
 };
-
 const getUsersById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -196,12 +289,26 @@ const updateExpert = async (req, res) => {
       last_name,
       email,
       phone,
+      alternate_phone,
       bio,
       experience_years,
+      country,
+      timezone,
       consultation_fee,
-      profile_image,
-      status,
-      verification_status,
+      professional_title,
+      profession,
+      whatsapp_number,
+      city,
+      state,
+      education,
+      certifications,
+      specialization,
+      languages,
+      about,
+      why_started,
+      mission,
+      client_approach,
+      uniqueness,
     } = req.body;
 
     if (!id) {
@@ -211,17 +318,19 @@ const updateExpert = async (req, res) => {
       });
     }
 
-    const existing = await client.query(
-      `SELECT id FROM users WHERE id = $1 AND role = 'EXPERT'`,
+    const existingResult = await client.query(
+      `SELECT * FROM users WHERE id = $1 AND role = 'EXPERT'`,
       [id]
     );
 
-    if (existing.rows.length === 0) {
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: "Expert not found.",
       });
     }
+
+    const existing = existingResult.rows[0];
 
     if (email) {
       const emailCheck = await client.query(
@@ -249,54 +358,138 @@ const updateExpert = async (req, res) => {
       }
     }
 
+    const profileImageFile = req.files?.profile_image?.[0] || null;
+    const coverImageFile = req.files?.cover_image?.[0] || null;
+
+    const [uploadedProfileImage, uploadedCoverImage] = await Promise.all([
+      uploadToCloudinary(
+        profileImageFile,
+        "mind-soul/expert/profile"
+      ),
+      uploadToCloudinary(coverImageFile, "mind-soul/expert/cover"),
+    ]);
+
+    const updates = {};
+
+    if (first_name !== undefined) updates.first_name = first_name;
+    if (last_name !== undefined) updates.last_name = last_name;
+    if (email !== undefined) updates.email = email;
+    if (phone !== undefined) updates.phone = phone;
+    if (alternate_phone !== undefined) updates.alternate_phone = alternate_phone;
+    if (bio !== undefined) updates.bio = bio;
+    if (experience_years !== undefined) {
+      updates.experience_years =
+        experience_years === "" || experience_years === null
+          ? null
+          : Number(experience_years);
+    }
+    if (country !== undefined) updates.country = country;
+    if (timezone !== undefined) updates.timezone = timezone;
+    if (consultation_fee !== undefined) {
+      updates.consultation_fee =
+        consultation_fee === "" || consultation_fee === null
+          ? null
+          : Number(consultation_fee);
+    }
+    if (professional_title !== undefined) {
+      updates.professional_title = professional_title;
+    }
+    if (profession !== undefined) updates.profession = profession;
+    if (whatsapp_number !== undefined) updates.whatsapp_number = whatsapp_number;
+    if (city !== undefined) updates.city = city;
+    if (state !== undefined) updates.state = state;
+    if (education !== undefined) updates.education = education;
+    if (specialization !== undefined) updates.specialization = specialization;
+    if (about !== undefined) updates.about = about;
+    if (why_started !== undefined) updates.why_started = why_started;
+    if (mission !== undefined) updates.mission = mission;
+    if (client_approach !== undefined) updates.client_approach = client_approach;
+    if (uniqueness !== undefined) updates.uniqueness = uniqueness;
+
+    if (languages !== undefined) {
+      updates.languages = parseLanguages(languages);
+    }
+
+    if (certifications !== undefined) {
+      updates.certifications = parseCertifications(certifications);
+    }
+
+    if (uploadedProfileImage) {
+      updates.profile_image = uploadedProfileImage;
+    }
+
+    if (uploadedCoverImage) {
+      updates.cover_image = uploadedCoverImage;
+    }
+
+    const mergedProfile = {
+      ...existing,
+      ...updates,
+    };
+
+    updates.profile_completed = isProfileCompleted(mergedProfile);
+
+    const fields = Object.keys(updates);
+
+    if (fields.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Provide at least one field to update.",
+      });
+    }
+
+    const setClause = fields
+      .map((field, index) => `${field} = $${index + 1}`)
+      .join(", ");
+
+    const values = fields.map((field) => updates[field]);
+    values.push(id);
+
     const { rows } = await client.query(
       `
       UPDATE users
       SET
-        first_name = COALESCE($1, first_name),
-        last_name = COALESCE($2, last_name),
-        email = COALESCE($3, email),
-        phone = COALESCE($4, phone),
-        bio = COALESCE($5, bio),
-        experience_years = COALESCE($6, experience_years),
-        consultation_fee = COALESCE($7, consultation_fee),
-        profile_image = COALESCE($8, profile_image),
-        status = COALESCE($9, status),
-        verification_status = COALESCE($10, verification_status)
-      WHERE id = $11 AND role = 'EXPERT'
+        ${setClause},
+        updated_at = NOW()
+      WHERE id = $${values.length}
+        AND role = 'EXPERT'
       RETURNING
         id,
         first_name,
         last_name,
         email,
         phone,
+        alternate_phone,
         role,
         bio,
         experience_years,
-        consultation_fee,
         profile_image,
-        status,
-        verification_status,
-        is_active,
-        is_verified,
+        cover_image,
+        country,
+        timezone,
+        consultation_fee,
+        professional_title,
+        profession,
+        whatsapp_number,
+        city,
+        state,
+        education,
+        certifications,
+        specialization,
+        languages,
+        about,
+        why_started,
+        mission,
+        client_approach,
+        uniqueness,
+        profile_completed,
         average_rating,
         total_reviews,
         total_sessions,
-        created_at
+        created_at,
+        updated_at
       `,
-      [
-        first_name,
-        last_name,
-        email,
-        phone,
-        bio,
-        experience_years,
-        consultation_fee,
-        profile_image,
-        status,
-        verification_status,
-        id,
-      ]
+      values
     );
 
     return res.status(200).json({
@@ -308,7 +501,7 @@ const updateExpert = async (req, res) => {
     console.error("Update Expert Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal Server Error",
+      message: error.message || "Internal Server Error",
     });
   }
 };
@@ -324,14 +517,16 @@ const deleteExperts = async (req, res) => {
       });
     }
 
+    const normalizedIds = ids.map((id) => String(id));
+
     const { rows } = await client.query(
       `
       DELETE FROM users
-      WHERE id = ANY($1::int[])
+      WHERE id::text = ANY($1::text[])
         AND role = 'EXPERT'
       RETURNING id
       `,
-      [ids]
+      [normalizedIds]
     );
 
     if (rows.length === 0) {
@@ -491,8 +686,10 @@ const verifyExpert = async (req, res) => {
     // const client = await client.connect();
 
     try {
-        const { user_id, status, reason } = req.body;
-        const verified_by = req.user.id || "53752807-166a-471d-8674-e4d2c57da3a6"; 
+        const {  status, reason } = req.body;
+        // console.log(req.user);
+        const user_id = req.params.id;
+        const verified_by =  "53752807-166a-471d-8674-e4d2c57da3a6"; 
 
         if (!user_id || !status) {
             return res.status(400).json({

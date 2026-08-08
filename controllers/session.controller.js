@@ -1,4 +1,5 @@
 const { client } = require("../cleint/client");
+const { uploadToCloudinary } = require("../cleint/cloudinary");
 
 const SESSION_RETURN = `
   s.id,
@@ -32,6 +33,25 @@ const SESSION_JOINS = `
   JOIN categories c ON c.id = s.category_id
 `;
 
+const toNullIfEmpty = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return value;
+};
+
+const toNumberOrNull = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+const toTimestampOrNull = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return value;
+};
+
 const validateExpertAndCategory = async (expert_id, category_id) => {
   const expertCheck = await client.query(
     `SELECT id FROM users WHERE id = $1 AND role = 'EXPERT'`,
@@ -61,7 +81,6 @@ const createSession = async (req, res, session_type) => {
       category_id,
       title,
       description,
-      thumbnail,
       video_url,
       meeting_link,
       start_time,
@@ -73,7 +92,7 @@ const createSession = async (req, res, session_type) => {
       session_type,
       status,
     } = req.body;
-    console.log(req.body);
+
     if (!expert_id || !category_id || !title) {
       return res.status(400).json({
         success: false,
@@ -102,6 +121,12 @@ const createSession = async (req, res, session_type) => {
         message: validation.error,
       });
     }
+
+    const thumbnailFile = req.files?.thumbnail?.[0] || null;
+    const thumbnailUrl = await uploadToCloudinary(
+      thumbnailFile,
+      "mind-soul/sessions/thumbnails"
+    );
 
     const { rows } = await client.query(
       `
@@ -133,15 +158,15 @@ const createSession = async (req, res, session_type) => {
         title,
         description || null,
         session_type,
-        thumbnail || null,
-        video_url || null,
-        meeting_link || null,
-        start_time || null,
-        end_time || null,
-        duration_minutes || null,
-        price ?? 0,
-        language || null,
-        max_participants || null,
+        thumbnailUrl,
+        toNullIfEmpty(video_url),
+        toNullIfEmpty(meeting_link),
+        toTimestampOrNull(start_time),
+        toTimestampOrNull(end_time),
+        toNumberOrNull(duration_minutes),
+        price !== undefined && price !== "" ? Number(price) : 0,
+        toNullIfEmpty(language),
+        toNumberOrNull(max_participants),
         status || "UPCOMING",
       ]
     );
@@ -167,7 +192,7 @@ const createLiveSession = (req, res) => createSession(req, res, "LIVE");
 
 const getAllSessions = async (req, res) => {
   try {
-    const { session_type, status } = req.query;
+    const { id, session_type, status } = req.query;
 
     const pageRaw = req.query.page;
     const limitRaw = req.query.limit;
@@ -176,6 +201,7 @@ const getAllSessions = async (req, res) => {
       Number.isFinite(Number(pageRaw)) && Number(pageRaw) > 0
         ? Number(pageRaw)
         : 1;
+
     const limit =
       Number.isFinite(Number(limitRaw)) && Number(limitRaw) > 0
         ? Math.min(Number(limitRaw), 50)
@@ -187,40 +213,63 @@ const getAllSessions = async (req, res) => {
     const values = [];
     let index = 1;
 
+    // Filter by session ID
+    if (id) {
+      filters.push(`s.id = $${index++}`);
+      values.push(id);
+    }
+
+    // Filter by session type
     if (session_type) {
       filters.push(`s.session_type = $${index++}`);
       values.push(session_type.toUpperCase());
     }
 
+    // Filter by status
     if (status) {
       filters.push(`s.status = $${index++}`);
       values.push(status.toUpperCase());
     }
 
     const whereClause =
-      filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+      filters.length > 0
+        ? `WHERE ${filters.join(" AND ")}`
+        : "";
 
+    // Count
     const countResult = await client.query(
       `
-      SELECT COUNT(*)::int AS total
-      ${SESSION_JOINS}
-      ${whereClause}
+        SELECT COUNT(*)::int AS total
+        ${SESSION_JOINS}
+        ${whereClause}
       `,
       values
     );
 
     const totalCount = countResult.rows[0]?.total ?? 0;
 
+    // Fetch sessions
     const { rows } = await client.query(
       `
-      SELECT ${SESSION_RETURN}
-      ${SESSION_JOINS}
-      ${whereClause}
-      ORDER BY s.created_at DESC
-      LIMIT $${index} OFFSET $${index + 1}
+        SELECT ${SESSION_RETURN}
+        ${SESSION_JOINS}
+        ${whereClause}
+
+        ORDER BY s.created_at DESC
+
+        LIMIT $${index}
+        OFFSET $${index + 1}
       `,
       [...values, limit, offset]
     );
+
+    // ID was provided but session doesn't exist
+    if (id && rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found",
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -228,20 +277,29 @@ const getAllSessions = async (req, res) => {
       totalCount,
       page,
       limit,
-      data: rows,
+
+      filters: {
+        id: id || null,
+        session_type: session_type || null,
+        status: status || null,
+      },
+
+      data: id ? rows[0] : rows,
     });
+
   } catch (error) {
     console.error("Get All Sessions Error:", error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
     });
   }
 };
-
 const getSessionById = async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.user.id;
 
     const { rows } = await client.query(
       `
@@ -256,6 +314,28 @@ const getSessionById = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Session not found.",
+      });
+    }
+
+    const purchaseCheck = await client.query(
+      `
+      SELECT id
+      FROM session_purchases
+      WHERE session_id = $1
+        AND user_id = $2
+        AND (
+          UPPER(COALESCE(payment_status, '')) IN ('SUCCESS', 'PARTIALLY_PAID')
+          OR LOWER(COALESCE(purchase_status, '')) = 'confirmed'
+        )
+      LIMIT 1
+      `,
+      [id, userId]
+    );
+
+    if (purchaseCheck.rowCount === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "You have not paid for this session.",
       });
     }
 
@@ -355,7 +435,6 @@ const updateSession = async (req, res) => {
       category_id,
       title,
       description,
-      thumbnail,
       video_url,
       meeting_link,
       start_time,
@@ -366,6 +445,15 @@ const updateSession = async (req, res) => {
       max_participants,
       status,
     } = req.body;
+
+    const thumbnailFile = req.files?.thumbnail?.[0] || null;
+    let thumbnailUrl;
+    if (thumbnailFile) {
+      thumbnailUrl = await uploadToCloudinary(
+        thumbnailFile,
+        "mind-soul/sessions/thumbnails"
+      );
+    }
 
     const existing = await client.query(
       `SELECT id FROM sessions WHERE id = $1`,
@@ -408,20 +496,23 @@ const updateSession = async (req, res) => {
     let index = 1;
 
     const payload = {
-      category_id,
-      title,
-      description,
-      thumbnail,
-      video_url,
-      meeting_link,
-      start_time,
-      end_time,
-      duration_minutes,
-      price,
-      language,
-      max_participants,
+      category_id: toNullIfEmpty(category_id),
+      title: toNullIfEmpty(title),
+      description: toNullIfEmpty(description),
+      video_url: toNullIfEmpty(video_url),
+      meeting_link: toNullIfEmpty(meeting_link),
+      start_time: toTimestampOrNull(start_time),
+      end_time: toTimestampOrNull(end_time),
+      duration_minutes: toNumberOrNull(duration_minutes),
+      price: toNumberOrNull(price),
+      language: toNullIfEmpty(language),
+      max_participants: toNumberOrNull(max_participants),
       status: status ? status.toUpperCase() : undefined,
     };
+
+    if (thumbnailUrl !== undefined) {
+      payload.thumbnail = thumbnailUrl;
+    }
 
     for (const [key, value] of Object.entries(payload)) {
       if (value !== undefined) {

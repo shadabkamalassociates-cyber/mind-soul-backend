@@ -2,7 +2,9 @@
 const {
   createRazorpayOrder,
   verifyPaymentSignature,
+  RAZORPAY_KEY_ID,
 } = require("../utils/razorpay");
+const { removePurchasedSessionFromCart } = require("./payment.controllers");
 
 const createSessionPurchase = async (req, res) => {
   try {
@@ -13,8 +15,23 @@ const createSessionPurchase = async (req, res) => {
       coupon_code = null,
       notes = null,
     } = req.body;
+    console.log(req.body,"------------------");
+    if (!session_id) {
+      return res.status(400).json({
+        success: false,
+        message: "session_id is required.",
+      });
+    }
 
-    const user_id = req.user.id;
+    const user_id = req.user?.id;
+    if (!user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. Token required.",
+      });
+    }
+
+    const qty = Math.max(1, parseInt(quantity, 10) || 1);
 
     const sessionResult = await client.query(
       `SELECT
@@ -22,7 +39,6 @@ const createSessionPurchase = async (req, res) => {
         expert_id,
         title,
         price,
-        discount_price,
         session_type,
         status
       FROM sessions
@@ -39,12 +55,19 @@ const createSessionPurchase = async (req, res) => {
 
     const session = sessionResult.rows[0];
 
-    if (session.status !== "active") {
+    if (!session.expert_id) {
       return res.status(400).json({
         success: false,
-        message: "Session is not available",
+        message: "Session expert is missing. Cannot create purchase.",
       });
     }
+
+    // if (session.status && String(session.status).toLowerCase() !== "active") {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Session is not available",
+    //   });
+    // }
 
     const existingPurchase = await client.query(
       `SELECT id
@@ -62,13 +85,15 @@ const createSessionPurchase = async (req, res) => {
       });
     }
 
-    const sessionPrice = Number(session.discount_price || session.price);
-    const amountBeforeDiscount = sessionPrice * quantity;
+    const sessionPrice = Number(session.price) || 0;
+    const amountBeforeDiscount = Number((sessionPrice * qty).toFixed(2));
     const discountAmount = 0;
     const taxableAmount = amountBeforeDiscount - discountAmount;
     const taxAmount = 0;
     const processingFee = Number((taxableAmount * 0.02).toFixed(2));
-    const finalAmount = taxableAmount + taxAmount + processingFee;
+    const finalAmount = Number(
+      (taxableAmount + taxAmount + processingFee).toFixed(2),
+    );
 
     let razorpayAmount = finalAmount;
     let amountPaid = finalAmount;
@@ -77,7 +102,7 @@ const createSessionPurchase = async (req, res) => {
     if (payment_type === "partial") {
       razorpayAmount = 1000;
       amountPaid = 1000;
-      remainingAmount = finalAmount - 1000;
+      remainingAmount = Number((finalAmount - 1000).toFixed(2));
     }
 
     const purchaseId =
@@ -126,7 +151,7 @@ const createSessionPurchase = async (req, res) => {
         session.id,
         user_id,
         session.expert_id,
-        quantity,
+        qty,
         payment_type,
         "pending",
         "pending_payment",
@@ -151,7 +176,7 @@ const createSessionPurchase = async (req, res) => {
         id: order.id,
         amount: order.amount,
         currency: order.currency,
-        key: process.env.RAZORPAY_KEY_ID,
+        key: RAZORPAY_KEY_ID,
       },
       amountBreakdown: {
         amountBeforeDiscount,
@@ -162,11 +187,16 @@ const createSessionPurchase = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error(err);
+    console.error("Create Session Purchase Error:", {
+      message: err,
+      code: err.code,
+      session_id: req.body?.session_id,
+      user_id: req.user?.id,
+    });
 
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: err.message || "Internal Server Error",
     });
   }
 };
@@ -230,19 +260,28 @@ const verifyPayment = async (req, res) => {
       });
     }
 
-    const purchaseStatus =
-      purchase.payment_type === "partial" ? "partially_paid" : "confirmed";
+    const purchaseStatus = "confirmed";
+    const paymentStatus =
+      purchase.payment_type === "partial" ? "partially_paid" : "success";
 
     const updatedPurchase = await db.query(
       `UPDATE session_purchases
        SET razorpay_payment_id = $1,
            razorpay_signature = $2,
-           payment_status = 'success',
-           purchase_status = $3
-       WHERE id = $4
+           payment_status = $3,
+           purchase_status = $4
+       WHERE id = $5
        RETURNING *`,
-      [razorpayPaymentId, razorpaySignature, purchaseStatus, purchase.id]
+      [
+        razorpayPaymentId,
+        razorpaySignature,
+        paymentStatus,
+        purchaseStatus,
+        purchase.id,
+      ]
     );
+
+    await removePurchasedSessionFromCart(db, user_id, purchase.session_id);
 
     await db.query("COMMIT");
 

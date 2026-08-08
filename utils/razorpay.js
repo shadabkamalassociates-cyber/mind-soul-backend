@@ -1,27 +1,16 @@
-const dotenv = require("dotenv");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
 
-dotenv.config({ path: "./.env" });
+// const RAZORPAY_KEY_ID = "rzp_live_wDtW9gcHXUjSAe";
+// const RAZORPAY_KEY_SECRET = "vUi6QIDZ7HD5wQLsOShqr8ZB";
 
-let razorpayInstance = null;
+const RAZORPAY_KEY_ID = "rzp_live_TLI7xGOv7CFiRl";
+const RAZORPAY_KEY_SECRET = "3aLtGIcd5pTqCYu0ktgHUPDA";
 
-const getRazorpay = () => {
-  if (!razorpayInstance) {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      throw new Error(
-        "Razorpay credentials missing. Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env"
-      );
-    }
-
-    razorpayInstance = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID,
-      key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-  }
-
-  return razorpayInstance;
-};
+const razorpay = new Razorpay({
+  key_id: RAZORPAY_KEY_ID,
+  key_secret: RAZORPAY_KEY_SECRET,
+});
 
 const createRazorpayOrder = async (amount, currency, receipt) => {
   const options = {
@@ -31,16 +20,16 @@ const createRazorpayOrder = async (amount, currency, receipt) => {
     payment_capture: 1,
   };
 
-  return getRazorpay().orders.create(options);
+  return razorpay.orders.create(options);
 };
 
 const verifyPaymentSignature = (
   razorpayOrderId,
   razorpayPaymentId,
-  razorpaySignature
+  razorpaySignature,
 ) => {
   const generatedSignature = crypto
-    .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+    .createHmac("sha256", RAZORPAY_KEY_SECRET)
     .update(`${razorpayOrderId}|${razorpayPaymentId}`)
     .digest("hex");
 
@@ -57,7 +46,9 @@ const verifyWebhookSignature = (body, signature, secret) => {
 };
 
 module.exports = {
-  getRazorpay,
+  razorpay,
+  RAZORPAY_KEY_ID,
+  RAZORPAY_KEY_SECRET,
   createRazorpayOrder,
   verifyPaymentSignature,
   verifyWebhookSignature,

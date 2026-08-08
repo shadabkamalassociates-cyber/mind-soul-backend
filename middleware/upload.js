@@ -36,7 +36,6 @@ const upload = multer({
 const signupUpload = upload.fields([
   { name: "profile_image", maxCount: 1 },
   { name: "cover_image", maxCount: 1 },
-  { name: "documents", maxCount: 10 },
 ]);
 
 const blogUpload = upload.fields([
@@ -44,8 +43,11 @@ const blogUpload = upload.fields([
   { name: "banner_image", maxCount: 1 },
 ]);
 
+const sessionUpload = upload.fields([{ name: "thumbnail", maxCount: 1 }]);
+
 module.exports = {
   upload,
   signupUpload,
   blogUpload,
+  sessionUpload,
 };

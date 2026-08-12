@@ -2,10 +2,12 @@ const { client } = require("../cleint/client");
 const {
   createRazorpayOrder,
   verifyPaymentSignature,
+  razorpay,
   RAZORPAY_KEY_ID,
+  maskKeyId,
 } = require("../utils/razorpay");
 
-const COMMUNITY_JOIN_AMOUNT = 1;
+const COMMUNITY_JOIN_AMOUNT = 99;
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
@@ -65,6 +67,15 @@ const createCommunityJoinPayment = async (req, res) => {
       source = "website_popup",
     } = req.body;
 
+    console.log("[community-join/create] request received", {
+      name: name ? "[provided]" : "[missing]",
+      email: email ? normalizeEmail(email) : "[missing]",
+      phone: phone ? normalizePhone(phone) : "[missing]",
+      amount,
+      source,
+      key_id: maskKeyId(RAZORPAY_KEY_ID),
+    });
+
     if (!name?.trim() || !email?.trim() || !phone?.trim()) {
       return res.status(400).json({
         success: false,
@@ -73,8 +84,9 @@ const createCommunityJoinPayment = async (req, res) => {
     }
 
     const finalAmount = COMMUNITY_JOIN_AMOUNT;
-    console.log("finalAmount++++++++++++++++", finalAmount,COMMUNITY_JOIN_AMOUNT);
-    if (Number(amount) === COMMUNITY_JOIN_AMOUNT) {
+
+    // Reject incorrect amounts (frontend must send exactly COMMUNITY_JOIN_AMOUNT).
+    if (Number(amount) !== COMMUNITY_JOIN_AMOUNT) {
       return res.status(400).json({
         success: false,
         message: `Community join payment must be ₹${COMMUNITY_JOIN_AMOUNT}.`,
@@ -82,31 +94,30 @@ const createCommunityJoinPayment = async (req, res) => {
     }
 
     const normalizedEmail = normalizeEmail(email);
+    const normalizedPhone = normalizePhone(phone);
 
     const confirmed = await client.query(
       `
-      SELECT id
+      SELECT id, email, phone
       FROM community_join_payments
-      WHERE LOWER(email) = $1
+      WHERE (
+          LOWER(email) = $1
+          OR regexp_replace(phone, '\\D', '', 'g') = $2
+        )
         AND purchase_status = 'confirmed'
       LIMIT 1
       `,
-      [normalizedEmail]
+      [normalizedEmail, normalizedPhone]
     );
-    if(confirmed.phone === phone.trim()){
-      return res.status(400).json({
-        success: false,
-        message: "This phone number already has lifetime community access.",
-      });
-    }
+
     if (confirmed.rowCount > 0) {
       return res.status(400).json({
         success: false,
-        message: "This email already has lifetime community access.",
+        message: "This email or phone already has lifetime community access.",
       });
     }
 
-    // Reuse an existing pending order for this email so retries don't create duplicates.
+    // Reuse an existing pending Razorpay order only if it is still valid on Razorpay.
     const pending = await client.query(
       `
       SELECT *
@@ -125,17 +136,63 @@ const createCommunityJoinPayment = async (req, res) => {
       const payment = pending.rows[0];
       const pendingAmount = Number(payment.amount) || finalAmount;
 
-      return res.status(200).json({
-        success: true,
-        message: "Existing community join payment order reused.",
-        payment,
-        razorpayOrder: {
-          id: payment.razorpay_order_id,
-          amount: Math.round(pendingAmount * 100),
-          currency: "INR",
-          key: RAZORPAY_KEY_ID,
-        },
-      });
+      try {
+        const remoteOrder = await razorpay.orders.fetch(payment.razorpay_order_id);
+        const remoteAmount = Number(remoteOrder.amount);
+        const expectedPaise = Math.round(pendingAmount * 100);
+        const reusable =
+          remoteOrder.status === "created" && remoteAmount === expectedPaise;
+
+        console.log("[community-join/create] pending order check", {
+          local_order_id: payment.razorpay_order_id,
+          remote_status: remoteOrder.status,
+          remote_amount: remoteAmount,
+          expected_paise: expectedPaise,
+          reusable,
+        });
+
+        if (reusable) {
+          return res.status(200).json({
+            success: true,
+            message: "Existing community join payment order reused.",
+            payment,
+            razorpayOrder: {
+              id: payment.razorpay_order_id,
+              amount: remoteAmount,
+              currency: remoteOrder.currency || "INR",
+              key: RAZORPAY_KEY_ID,
+            },
+          });
+        }
+
+        // Stale/paid/mismatched order — mark local row failed and create a fresh order.
+        await client.query(
+          `
+          UPDATE community_join_payments
+          SET payment_status = 'failed',
+              purchase_status = 'failed',
+              updated_at = NOW()
+          WHERE id = $1
+          `,
+          [payment.id]
+        );
+      } catch (fetchError) {
+        console.warn("[community-join/create] pending order fetch failed; creating fresh order", {
+          local_order_id: payment.razorpay_order_id,
+          message: fetchError.message,
+          statusCode: fetchError.statusCode,
+        });
+        await client.query(
+          `
+          UPDATE community_join_payments
+          SET payment_status = 'failed',
+              purchase_status = 'failed',
+              updated_at = NOW()
+          WHERE id = $1
+          `,
+          [payment.id]
+        );
+      }
     }
 
     const purchaseId =
@@ -174,6 +231,13 @@ const createCommunityJoinPayment = async (req, res) => {
       ]
     );
 
+    console.log("[community-join/create] payment row inserted", {
+      purchase_id: rows[0].purchase_id,
+      razorpay_order_id: rows[0].razorpay_order_id,
+      amount: rows[0].amount,
+      payment_status: rows[0].payment_status,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Community join payment order created.",
@@ -186,7 +250,11 @@ const createCommunityJoinPayment = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Create Community Join Payment Error:", error);
+    console.error("Create Community Join Payment Error:", {
+      message: error.message,
+      statusCode: error.statusCode,
+      error: error.error || null,
+    });
     return res.status(500).json({
       success: false,
       message: error.message || "Internal Server Error",
@@ -194,28 +262,31 @@ const createCommunityJoinPayment = async (req, res) => {
   }
 };
 
+/**
+ * Post-checkout verification.
+ * Expects razorpayOrderId, razorpayPaymentId, razorpaySignature from Razorpay handler.
+ */
 const verifyCommunityJoinPayment = async (req, res) => {
   const db = await client.connect();
 
   try {
-    console.log("|||||||||||||||||||||||||||||||", req.user);
-    const user =  req.user.id;
+    const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = req.body;
 
-    const userPhone = await db.query(
-      `
-      SELECT *
-      FROM users
-      WHERE id = $1`,
-      [user]
-    );
+    console.log("[community-join/verify] request received", {
+      has_order_id: Boolean(razorpayOrderId),
+      has_payment_id: Boolean(razorpayPaymentId),
+      has_signature: Boolean(razorpaySignature),
+      order_id: razorpayOrderId || null,
+      payment_id: razorpayPaymentId || null,
+    });
 
-    // if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-    //   return res.status(400).json({
-    //     success: false,
-    //     message:
-    //       "razorpayOrderId, razorpayPaymentId and razorpaySignature are required.",
-    //   });
-    // }
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "razorpayOrderId, razorpayPaymentId and razorpaySignature are required.",
+      });
+    }
 
     await db.query("BEGIN");
 
@@ -223,10 +294,11 @@ const verifyCommunityJoinPayment = async (req, res) => {
       `
       SELECT *
       FROM community_join_payments
-      WHERE phone = $1
+      WHERE razorpay_order_id = $1
+        AND purchase_status = 'pending_payment'
       FOR UPDATE
       `,
-      [ userPhone.rows[0].phone]
+      [razorpayOrderId]
     );
 
     if (paymentResult.rowCount === 0) {
@@ -237,30 +309,30 @@ const verifyCommunityJoinPayment = async (req, res) => {
       });
     }
 
-
     const payment = paymentResult.rows[0];
-    console.log("payment++++++++++++++++", payment);
-    if (!payment?.razorpay_order_id || !payment?.razorpay_payment_id || !payment?.razorpay_signature) {
-      return res.status(200).json({
-        success: false,
-        message: "We have not received the payment yet. Please wait for the payment to be received."
-      });
-    }
+
     const isValid = verifyPaymentSignature(
-      payment?.razorpay_order_id,
-      payment?.razorpay_payment_id,
-      payment?.razorpay_signature
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature
     );
-    console.log("isValid++++++++++++++++", isValid);
+
+    console.log("[community-join/verify] signature check", {
+      order_id: razorpayOrderId,
+      valid: isValid,
+    });
+
     if (!isValid) {
       await db.query(
         `
         UPDATE community_join_payments
         SET payment_status = 'failed',
+            razorpay_payment_id = $2,
+            razorpay_signature = $3,
             updated_at = NOW()
         WHERE id = $1
         `,
-        [payment.id]
+        [payment.id, razorpayPaymentId, razorpaySignature]
       );
 
       await db.query("COMMIT");
@@ -271,14 +343,33 @@ const verifyCommunityJoinPayment = async (req, res) => {
       });
     }
 
-    
+    const { rows } = await db.query(
+      `
+      UPDATE community_join_payments
+      SET razorpay_payment_id = $1,
+          razorpay_signature = $2,
+          payment_status = 'success',
+          purchase_status = 'confirmed',
+          updated_at = NOW()
+      WHERE id = $3
+      RETURNING *
+      `,
+      [razorpayPaymentId, razorpaySignature, payment.id]
+    );
 
     await db.query("COMMIT");
 
+    console.log("[community-join/verify] payment confirmed", {
+      purchase_id: rows[0].purchase_id,
+      razorpay_order_id: rows[0].razorpay_order_id,
+      payment_status: rows[0].payment_status,
+      purchase_status: rows[0].purchase_status,
+    });
+
     return res.status(200).json({
-      success: isValid,
+      success: true,
       message: "Payment verified. Welcome to the community!",
-      payment: payment,
+      payment: rows[0],
     });
   } catch (error) {
     await db.query("ROLLBACK");
@@ -292,6 +383,72 @@ const verifyCommunityJoinPayment = async (req, res) => {
   }
 };
 
+/**
+ * Status check for logged-in users: has this phone/email already paid?
+ * Used by Just99 page to decide whether to show congratulations modal.
+ */
+
+const getCommunityJoinPaymentStatus = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const userResult = await client.query(
+      `SELECT email, phone FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found.",
+      });
+    }
+
+    const email = normalizeEmail(userResult.rows[0].email);
+    const phone = normalizePhone(userResult.rows[0].phone);
+
+    const paymentResult = await client.query(
+      `
+      SELECT *
+      FROM community_join_payments
+      WHERE purchase_status = 'confirmed'
+        AND payment_status = 'success'
+        AND (
+          LOWER(email) = $1
+          OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2
+        )
+      ORDER BY updated_at DESC NULLS LAST, created_at DESC
+      LIMIT 1
+      `,
+      [email, phone]
+    );
+
+    if (paymentResult.rowCount === 0) {
+      return res.status(200).json({
+        success: false,
+        message: "No confirmed community join payment found.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Payment verified. Welcome to the community!",
+      payment: paymentResult.rows[0],
+    });
+  } catch (error) {
+    console.error("Get Community Join Payment Status Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};   
 
 const fetchAllPayments = async (req, res) => {
   try {
@@ -301,11 +458,10 @@ const fetchAllPayments = async (req, res) => {
       `
       SELECT *
       FROM community_join_payments
-     
       ORDER BY created_at DESC
       LIMIT $1 OFFSET $2
       `,
-      [ limit, offset]
+      [limit, offset]
     );
     return res.status(200).json({
       success: true,
@@ -316,13 +472,15 @@ const fetchAllPayments = async (req, res) => {
     console.error("Fetch All Payments Error:", error);
     return res.status(500).json({
       success: false,
-      message: error.message || "Internal Server Error",
+      message: "Internal Server Error",
     });
   }
 };
+
 module.exports = {
   submitJoinLead,
   createCommunityJoinPayment,
   verifyCommunityJoinPayment,
+  getCommunityJoinPaymentStatus,
   fetchAllPayments,
 };

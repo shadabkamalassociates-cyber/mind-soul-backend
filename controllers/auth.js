@@ -12,8 +12,6 @@ const WHATSAPP_OTP_WEBHOOK_ID =
   process.env.WHATSAPP_OTP_WEBHOOK_ID || "1321910100997854";
 const WHATSAPP_OTP_TEMPLATE_NAME =
   process.env.WHATSAPP_OTP_TEMPLATE_NAME || "otp_msg";
-const WHATSAPP_OTP_APP_NAME =
-  process.env.WHATSAPP_OTP_APP_NAME || "Mind Soul";
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 
 const otpStore = new Map();
@@ -58,17 +56,8 @@ const sendOtpViaWhatsApp = async (mobileNumber, otp) => {
         {
           type: "body",
           parameters: [
-            { type: "text", text: WHATSAPP_OTP_APP_NAME },
             { type: "text", text: otp },
             { type: "text", text: "10 min" },
-            {
-              type: "text",
-              text: process.env.WHATSAPP_OTP_VARIABLE_4 || "-",
-            },
-            {
-              type: "text",
-              text: process.env.WHATSAPP_OTP_VARIABLE_5 || "-",
-            },
           ],
         },
       ],

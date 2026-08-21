@@ -9,7 +9,12 @@ const {
 const OTP_EXPIRY_MS = 10 * 60 * 1000;
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
 const WHATSAPP_OTP_WEBHOOK_ID =
-  process.env.WHATSAPP_OTP_WEBHOOK_ID || "67722d68ea04d946eaf743ac";
+  process.env.WHATSAPP_OTP_WEBHOOK_ID || "1321910100997854";
+const WHATSAPP_OTP_TEMPLATE_NAME =
+  process.env.WHATSAPP_OTP_TEMPLATE_NAME || "otp_msg";
+const WHATSAPP_OTP_APP_NAME =
+  process.env.WHATSAPP_OTP_APP_NAME || "Mind Soul";
+const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 
 const otpStore = new Map();
 
@@ -23,9 +28,61 @@ const normalizePhone = (phone) => {
   return digits;
 };
 
+const formatWhatsAppRecipient = (mobileNumber) => {
+  const digits = String(mobileNumber).replace(/\D/g, "");
+
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+
+  return digits;
+};
+
 const sendOtpViaWhatsApp = async (mobileNumber, otp) => {
-  const whatsappUrl = `https://webhooks.wappblaster.com/webhook/${WHATSAPP_OTP_WEBHOOK_ID}?number=91${mobileNumber}&otp=${otp}`;
-  await axios.post(whatsappUrl);
+  if (!WHATSAPP_ACCESS_TOKEN) {
+    throw new Error("WHATSAPP_ACCESS_TOKEN is not configured.");
+  }
+
+  const whatsappUrl = `https://crmapi1.whatapi.in/api/meta/v19.0/${WHATSAPP_OTP_WEBHOOK_ID}/messages`;
+
+  const payload = {
+    to: formatWhatsAppRecipient(mobileNumber),
+    recipient_type: "individual",
+    type: "template",
+    template: {
+      language: {
+        policy: "deterministic",
+        code: "en_GB",
+      },
+      name: WHATSAPP_OTP_TEMPLATE_NAME,
+      components: [
+        {
+          type: "body",
+          parameters: [
+            { type: "text", text: WHATSAPP_OTP_APP_NAME },
+            { type: "text", text: otp },
+            { type: "text", text: "10 min" },
+            {
+              type: "text",
+              text: process.env.WHATSAPP_OTP_VARIABLE_4 || "-",
+            },
+            {
+              type: "text",
+              text: process.env.WHATSAPP_OTP_VARIABLE_5 || "-",
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const response = await axios.post(whatsappUrl, payload, {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+    },
+  });
+
+  return response.data;
 };
 
 const parseLanguages = (languages) => {

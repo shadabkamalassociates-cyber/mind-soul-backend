@@ -14,6 +14,7 @@ const paymentRouter = require('./routers/payment.routers');
 const blogRouter = require('./routers/blog.routers');
 const communityRouter = require('./routers/community.routers');
 const sessionBookingRouter = require('./routers/bookingSession.router');
+const virtualMeetingRouter = require('./routers/meeting.routers');
 const app = express();
 dotenv.config();
 const PORT = process.env.PORT || 3000;
@@ -49,6 +50,7 @@ app.use('/api/ratings', ratingRouter);
 app.use('/api/sessions', sessionRouter);
 app.use('/api/payment', paymentRouter);
 app.use('/api/community', communityRouter);
+app.use('/api/virtual-meeting', virtualMeetingRouter);
 app.use('/api/session-purchase', sessionBookingRouter);
 app.use('/api/blogs', blogRouter);
 

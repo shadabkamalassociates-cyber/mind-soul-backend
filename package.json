@@ -11,6 +11,7 @@
     "server": "nodemon server.js"
   },
   "dependencies": {
+    "agora-token": "^2.0.5",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.3.0",
     "cloudinary": "^2.10.0",

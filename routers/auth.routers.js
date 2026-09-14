@@ -3,7 +3,7 @@ const { register, login, checkAuth, sendOtp } = require("../controllers/auth");
 const { userRole, expertRole, adminRole, auth } = require("../middleware/role");
 const { signupUpload } = require("../middleware/upload");
 
-const authRouter = express.Router();
+const   authRouter = express.Router();
 
 authRouter.post("/user/signUp", userRole, signupUpload, register);
 authRouter.post("/user/logIn", userRole, login);

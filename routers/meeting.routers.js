@@ -1,15 +1,10 @@
 
 const express = require("express");
 const { createMeeting, joinInstantMeeting } = require("../controllers/virtualmeeting.controller");
+const { auth } = require("../middleware/role");
 
 const virtualMeetingRouter = express.Router();
-virtualMeetingRouter.post("/create", createMeeting);
-virtualMeetingRouter.post("/join", joinInstantMeeting);
-// virtualMeetingRouter.post("/join-lead", submitJoinLead);
-// virtualMeetingRouter.post("/join-payment", createCommunityJoinPayment);
-// // Status check for logged-in users (Just99 congrats modal).
-// virtualMeetingRouter.post("/verify-payment", auth, getCommunityJoinPaymentStatus);
-// // Post-checkout signature verification (also available under /payment/...).
-// virtualMeetingRouter.post("/confirm-payment", verifyCommunityJoinPayment);
-// virtualMeetingRouter.get("/all", fetchAllPayments);
+virtualMeetingRouter.post("/create",  createMeeting);
+virtualMeetingRouter.post("/join",  joinInstantMeeting);
+virtualMeetingRouter.post("/join/:meetingId", auth, joinInstantMeeting);
 module.exports = virtualMeetingRouter;

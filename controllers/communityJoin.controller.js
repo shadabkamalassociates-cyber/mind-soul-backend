@@ -10,7 +10,7 @@ const {
   sendCommunityPaymentConfirmationWhatsApp,
 } = require("../utils/whatsapp");
 
-const COMMUNITY_JOIN_AMOUNT = 99;
+const COMMUNITY_JOIN_AMOUNT = 11;
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
@@ -104,6 +104,8 @@ const createCommunityJoinPayment = async (req, res) => {
       `,
       [normalizedEmail, normalizedPhone]
     );
+    
+    console.log(confirmed,"confirmed+++++++++++++++");
 
     if (confirmed.rowCount > 0) {
       return res.status(400).json({
@@ -131,15 +133,21 @@ const createCommunityJoinPayment = async (req, res) => {
       const pendingAmount = Number(payment.amount) || finalAmount;
 
       try {
+        // Prefer REST fetch via axios-backed SDK, but guard .status — SDK normalizeError
+        // crashes when axios has no response (see node_modules/razorpay/dist/api.js:34).
         const remoteOrder = await razorpay.orders.fetch(payment.razorpay_order_id);
+        if (!remoteOrder?.id) {
+          throw new Error("Razorpay order fetch returned an empty response.");
+        }
+
         const remoteAmount = Number(remoteOrder.amount);
         const expectedPaise = Math.round(pendingAmount * 100);
         const reusable =
-          remoteOrder.status === "created" && remoteAmount === expectedPaise;
+          remoteOrder?.status === "created" && remoteAmount === expectedPaise;
 
         console.log("[community-join/create] pending order check", {
           local_order_id: payment.razorpay_order_id,
-          remote_status: remoteOrder.status,
+          remote_status: remoteOrder?.status ?? null,
           remote_amount: remoteAmount,
           expected_paise: expectedPaise,
           reusable,
@@ -172,8 +180,9 @@ const createCommunityJoinPayment = async (req, res) => {
       } catch (fetchError) {
         console.warn("[community-join/create] pending order fetch failed; creating fresh order", {
           local_order_id: payment.razorpay_order_id,
-          message: fetchError.message,
-          statusCode: fetchError.statusCode,
+          message: fetchError?.message ?? null,
+          statusCode: fetchError?.statusCode ?? fetchError?.response?.status ?? null,
+          name: fetchError?.name ?? null,
         });
         await client.query(
           `

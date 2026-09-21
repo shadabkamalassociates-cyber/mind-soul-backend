@@ -1,5 +1,5 @@
 const bcrypt = require("bcrypt");
-const axios = require("axios");
+const https = require("https");
 const { client } = require("../cleint/client");
 const { generateToken } = require("./common/generateToken");
 const {
@@ -12,8 +12,6 @@ const WHATSAPP_OTP_WEBHOOK_ID =
   process.env.WHATSAPP_OTP_WEBHOOK_ID || "1321910100997854";
 const WHATSAPP_OTP_TEMPLATE_NAME =
   process.env.WHATSAPP_OTP_TEMPLATE_NAME || "otp_msg";
-const WHATSAPP_OTP_APP_NAME =
-  process.env.WHATSAPP_OTP_APP_NAME || "Mind Soul";
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 
 const otpStore = new Map();
@@ -29,23 +27,76 @@ const normalizePhone = (phone) => {
 };
 
 const formatWhatsAppRecipient = (mobileNumber) => {
-  const digits = String(mobileNumber).replace(/\D/g, "");
-
+  const digits = String(mobileNumber || "").replace(/\D/g, "");
   if (digits.length === 10) return `91${digits}`;
   if (digits.length === 12 && digits.startsWith("91")) return digits;
-
   return digits;
 };
 
-const sendOtpViaWhatsApp = async (mobileNumber, otp) => {
+const postWhatsAppJson = (url, payload, token) =>
+  new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const parsed = new URL(url);
+
+    const request = https.request(
+      {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          Authorization: `Bearer ${String(token).trim()}`,
+        },
+      },
+      (response) => {
+        let raw = "";
+        response.on("data", (chunk) => {
+          raw += chunk;
+        });
+        response.on("end", () => {
+          let data = raw;
+          try {
+            data = raw ? JSON.parse(raw) : {};
+          } catch (_) {
+            data = { message: raw };
+          }
+          resolve({ status: response.statusCode || 500, data });
+        });
+      }
+    );
+
+    request.on("error", reject);
+    request.setTimeout(15000, () => {
+      request.destroy(new Error("WhatsApp API request timed out."));
+    });
+    request.write(body);
+    request.end();
+  });
+
+const getWhatsAppErrorMessage = (data, fallback) =>
+  data?.error?.message ||
+  data?.error?.error_user_msg ||
+  (typeof data?.message === "string" ? data.message : null) ||
+  data?.error_message ||
+  (typeof data?.error === "string" ? data.error : null) ||
+  fallback ||
+  "Failed to send OTP via WhatsApp.";
+
+const sendOtpViaWhatsApp = async (mobileNumber, otp, first_name) => {
   if (!WHATSAPP_ACCESS_TOKEN) {
-    throw new Error("WHATSAPP_ACCESS_TOKEN is not configured.");
+    const error = new Error("WHATSAPP_ACCESS_TOKEN is not configured.");
+    error.statusCode = 500;
+    throw error;
   }
 
+  const to = String(formatWhatsAppRecipient(mobileNumber));
+  const otpText = String(otp);
   const whatsappUrl = `https://crmapi1.whatapi.in/api/meta/v19.0/${WHATSAPP_OTP_WEBHOOK_ID}/messages`;
 
   const payload = {
-    to: formatWhatsAppRecipient(mobileNumber),
+    to,
     recipient_type: "individual",
     type: "template",
     template: {
@@ -58,31 +109,43 @@ const sendOtpViaWhatsApp = async (mobileNumber, otp) => {
         {
           type: "body",
           parameters: [
-            { type: "text", text: WHATSAPP_OTP_APP_NAME },
-            { type: "text", text: otp },
-            { type: "text", text: "10 min" },
-            {
-              type: "text",
-              text: process.env.WHATSAPP_OTP_VARIABLE_4 || "-",
-            },
-            {
-              type: "text",
-              text: process.env.WHATSAPP_OTP_VARIABLE_5 || "-",
-            },
+            { type: "text", text: first_name },
+            { type: "text", text:`Your OTP is ${otpText}` },
+            { type: "text", text: "This OTP is valid for 10 minutes" },
+            { type: "text", text: "Do not share this OTP with anyone." },
+            { type: "text", text: "Please use this OTP to verify your account." },
           ],
         },
       ],
     },
   };
 
-  const response = await axios.post(whatsappUrl, payload, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
-    },
-  });
+  const { status, data } = await postWhatsAppJson(
+    whatsappUrl,
+    payload,
+    WHATSAPP_ACCESS_TOKEN
+  );
 
-  return response.data;
+  const messageStatus = String(
+    data?.message?.message_status || data?.message_status || ""
+  ).toLowerCase();
+  const queuedOk = ["queued", "sent", "delivered", "accepted", "success"].includes(
+    messageStatus
+  );
+  const apiFailed =
+    status >= 400 ||
+    data?.success === false ||
+    messageStatus === "failed" ||
+    Boolean(data?.error);
+
+  if (apiFailed || !queuedOk) {
+    const error = new Error(getWhatsAppErrorMessage(data, "WhatsApp did not accept the OTP message."));
+    error.statusCode = status >= 400 ? status : 502;
+    error.details = data;
+    throw error;
+  }
+
+  return data;
 };
 
 const parseLanguages = (languages) => {
@@ -492,7 +555,9 @@ const login = async (req, res) => {
 
 const sendOtp = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const phone =
+      req.body?.phone ?? req.body?.mobile ?? req.body?.mobileNumber;
+
     if (!phone) {
       return res.status(400).json({
         success: false,
@@ -524,32 +589,49 @@ const sendOtp = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const hashedOtp = await bcrypt.hash(otp, 10);
 
+    const db = await client.connect();
+    const userResult = await db.query(
+      `
+      SELECT first_name
+      FROM users
+      WHERE RIGHT(regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g'), 10) = $1
+      LIMIT 1
+      `,
+      [mobileNumber]
+    );
+    const first_name = userResult.rows[0]?.first_name || req.body?.first_name;
+
+    const whatsappResponse = await sendOtpViaWhatsApp(
+      mobileNumber,
+      otp,
+      first_name
+    );
+
     otpStore.set(mobileNumber, {
       hashedOtp,
       expiry: now + OTP_EXPIRY_MS,
       lastSentAt: now,
     });
 
-    try {
-      await sendOtpViaWhatsApp(mobileNumber, otp);
-    } catch (whatsappError) {
-      otpStore.delete(mobileNumber);
-      console.error("Error sending OTP via WhatsApp:", whatsappError);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP. Please try again later.",
-      });
-    }
-
     return res.status(200).json({
       success: true,
       message: "OTP sent successfully via WhatsApp.",
+      data: {
+        phone: mobileNumber,
+        queue_id: whatsappResponse?.message?.queue_id || null,
+        message_status: whatsappResponse?.message?.message_status || "queued",
+      },
     });
   } catch (error) {
-    console.error("Send OTP Error:", error);
-    return res.status(500).json({
+    console.error("Send OTP Error:", {
+      message: error.message,
+      status: error.statusCode,
+      details: error.details,
+    });
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Internal Server Error",
+      message: error.message || "Failed to send OTP. Please try again later.",
+      error: error.details || null,
     });
   }
 };

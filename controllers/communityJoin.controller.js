@@ -6,7 +6,11 @@ const {
   RAZORPAY_KEY_ID,
   maskKeyId,
 } = require("../utils/razorpay");
+const {
+  sendCommunityPaymentConfirmationWhatsApp,
+} = require("../utils/whatsapp");
 
+const COMMUNITY_JOIN_AMOUNT = 11;
 const COMMUNITY_JOIN_AMOUNT = 11;
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
@@ -128,6 +132,8 @@ const createCommunityJoinPayment = async (req, res) => {
       `,
       [normalizedEmail, normalizedPhone]
     );
+    
+    console.log(confirmed,"confirmed+++++++++++++++");
 
     if (confirmed.rowCount > 0) {
       return res.status(400).json({
@@ -290,7 +296,6 @@ const verifyCommunityJoinPayment = async (req, res) => {
       SELECT *
       FROM community_join_payments
       WHERE razorpay_order_id = $1
-        AND purchase_status = 'pending_payment'
       FOR UPDATE
       `,
       [razorpayOrderId]
@@ -300,11 +305,36 @@ const verifyCommunityJoinPayment = async (req, res) => {
       await db.query("ROLLBACK");
       return res.status(404).json({
         success: false,
-        message: "Payment not found or already processed.",
+        message: "Payment not found.",
       });
     }
 
     const payment = paymentResult.rows[0];
+
+    if (
+      payment.purchase_status === "confirmed" &&
+      payment.payment_status === "success"
+    ) {
+      await db.query("COMMIT");
+      console.log("[community-join] payment verified", {
+        purchase_id: payment.purchase_id,
+        already_confirmed: true,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified. Welcome to the community!",
+        payment,
+      });
+    }
+
+    if (payment.purchase_status !== "pending_payment") {
+      await db.query("ROLLBACK");
+      return res.status(400).json({
+        success: false,
+        message: "Payment not found or already processed.",
+      });
+    }
 
     const isValid = verifyPaymentSignature(
       razorpayOrderId,
@@ -354,17 +384,41 @@ const verifyCommunityJoinPayment = async (req, res) => {
 
     await db.query("COMMIT");
 
-    console.log("[community-join/verify] payment confirmed", {
-      purchase_id: rows[0].purchase_id,
-      razorpay_order_id: rows[0].razorpay_order_id,
-      payment_status: rows[0].payment_status,
-      purchase_status: rows[0].purchase_status,
+    const confirmedPayment = rows[0];
+
+    console.log("[community-join] payment verified", {
+      purchase_id: confirmedPayment.purchase_id,
+      razorpay_order_id: confirmedPayment.razorpay_order_id,
+      razorpay_payment_id: confirmedPayment.razorpay_payment_id,
+      payment_status: confirmedPayment.payment_status,
+      purchase_status: confirmedPayment.purchase_status,
     });
+
+    try {
+      const whatsappResponse = await sendCommunityPaymentConfirmationWhatsApp(
+        confirmedPayment,
+        COMMUNITY_JOIN_AMOUNT
+      );
+
+      console.log("[community-join] WhatsApp confirmation sent", {
+        purchase_id: confirmedPayment.purchase_id,
+        phone: confirmedPayment.phone,
+        message_id: whatsappResponse?.messages?.[0]?.id || null,
+      });
+    } catch (whatsappError) {
+      console.error("[community-join] WhatsApp confirmation failed", {
+        purchase_id: confirmedPayment.purchase_id,
+        phone: confirmedPayment.phone,
+        message: whatsappError.message,
+        status: whatsappError.response?.status || null,
+        data: whatsappError.response?.data || null,
+      });
+    }
 
     return res.status(200).json({
       success: true,
       message: "Payment verified. Welcome to the community!",
-      payment: rows[0],
+      payment: confirmedPayment,
     });
   } catch (error) {
     await db.query("ROLLBACK");
@@ -377,11 +431,6 @@ const verifyCommunityJoinPayment = async (req, res) => {
     db.release();
   }
 };
-
-/**
- * Status check for logged-in users: has this phone/email already paid?
- * Used by Just99 page to decide whether to show congratulations modal.
- */
 
 const getCommunityJoinPaymentStatus = async (req, res) => {
   try {
@@ -443,7 +492,7 @@ const getCommunityJoinPaymentStatus = async (req, res) => {
       message: error.message || "Internal Server Error",
     });
   }
-};   
+};
 
 const fetchAllPayments = async (req, res) => {
   try {

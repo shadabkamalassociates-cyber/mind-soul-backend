@@ -144,6 +144,61 @@ const getCartWithItems = async (db, cartId) => {
   };
 };
 
+const completedpayment = async (req, res) => {
+  try {
+    const { payment_status } = req.query;
+    const values = [];
+    const conditions = [];
+
+    if (payment_status && String(payment_status).trim()) {
+      values.push(String(payment_status).trim().toLowerCase());
+      conditions.push(`LOWER(payment_status) = $${values.length}`);
+    } else {
+      conditions.push(`payment_status = 'success'`);
+      conditions.push(`purchase_status = 'confirmed'`);
+    }
+
+    const { rows } = await client.query(
+      `
+      SELECT
+        id,
+        purchase_id,
+        name,
+        email,
+        phone,
+        amount,
+        payment_type,
+        payment_status,
+        purchase_status,
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+        source,
+        notes,
+        created_at,
+        updated_at
+      FROM community_join_payments
+     
+      ORDER BY created_at DESC
+      `,
+      values
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Completed payment fetched successfully.",
+      payments: rows,
+      count: rows.length,
+    });
+  } catch (error) {
+    console.error("Completed Payment Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
 const addToCart = async (req, res) => {
   const db = await client.connect();
 
@@ -905,6 +960,7 @@ const getPurchaseDetails = async (req, res) => {
 };
 
 module.exports = {
+  completedpayment,
   addToCart,
   getCart,
   updateCartItem,

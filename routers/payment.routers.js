@@ -1,6 +1,7 @@
 const express = require("express");
 const { auth } = require("../middleware/role");
 const {
+  completedpayment,
   addToCart,
   getCart,
   updateCartItem,
@@ -19,7 +20,7 @@ const {
 } = require("../controllers/communityJoin.controller");
 
 const paymentRouter = express.Router();
-
+paymentRouter.get("/completed",  completedpayment);
 paymentRouter.post("/cart/add",auth,  addToCart);
 paymentRouter.get("/fetch-cart", auth, getCart);
 paymentRouter.put("/cart/item/:id", auth, updateCartItem);

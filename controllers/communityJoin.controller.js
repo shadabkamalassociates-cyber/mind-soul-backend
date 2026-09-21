@@ -7,7 +7,7 @@ const {
   maskKeyId,
 } = require("../utils/razorpay");
 
-const COMMUNITY_JOIN_AMOUNT = 99;
+const COMMUNITY_JOIN_AMOUNT = 11;
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
@@ -54,11 +54,12 @@ const submitJoinLead = async (req, res) => {
     });
   }
 };
-
 const createCommunityJoinPayment = async (req, res) => {
   try {
     const {
       name,
+      first_name,
+      last_name,
       email,
       phone,
       payment_type = "full",
@@ -67,8 +68,15 @@ const createCommunityJoinPayment = async (req, res) => {
       source = "website_popup",
     } = req.body;
 
+    const fullName =
+      String(name || "").trim() ||
+      [first_name, last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
     console.log("[community-join/create] request received", {
-      name: name ? "[provided]" : "[missing]",
+      name: fullName ? "[provided]" : "[missing]",
       email: email ? normalizeEmail(email) : "[missing]",
       phone: phone ? normalizePhone(phone) : "[missing]",
       amount,
@@ -76,16 +84,23 @@ const createCommunityJoinPayment = async (req, res) => {
       key_id: maskKeyId(RAZORPAY_KEY_ID),
     });
 
-    if (!name?.trim() || !email?.trim() || !phone?.trim()) {
+    // -----------------------------------------
+    // 1. Validate customer details
+    // -----------------------------------------
+
+    if (!fullName || !email?.trim() || !phone?.trim()) {
       return res.status(400).json({
         success: false,
         message: "name, email and phone are required.",
       });
     }
 
+    // -----------------------------------------
+    // 2. Validate amount
+    // -----------------------------------------
+
     const finalAmount = COMMUNITY_JOIN_AMOUNT;
 
-    // Reject incorrect amounts (frontend must send exactly COMMUNITY_JOIN_AMOUNT).
     if (Number(amount) !== COMMUNITY_JOIN_AMOUNT) {
       return res.status(400).json({
         success: false,
@@ -96,15 +111,19 @@ const createCommunityJoinPayment = async (req, res) => {
     const normalizedEmail = normalizeEmail(email);
     const normalizedPhone = normalizePhone(phone);
 
+    // -----------------------------------------
+    // 3. Check existing confirmed customer
+    // -----------------------------------------
+
     const confirmed = await client.query(
       `
       SELECT id, email, phone
       FROM community_join_payments
       WHERE (
-          LOWER(email) = $1
-          OR regexp_replace(phone, '\\D', '', 'g') = $2
-        )
-        AND purchase_status = 'confirmed'
+        LOWER(email) = $1
+        OR regexp_replace(phone, '\\D', '', 'g') = $2
+      )
+      AND purchase_status = 'confirmed'
       LIMIT 1
       `,
       [normalizedEmail, normalizedPhone]
@@ -113,92 +132,44 @@ const createCommunityJoinPayment = async (req, res) => {
     if (confirmed.rowCount > 0) {
       return res.status(400).json({
         success: false,
-        message: "This email or phone already has lifetime community access.",
+        message:
+          "This email or phone already has lifetime community access.",
       });
     }
 
-    // Reuse an existing pending Razorpay order only if it is still valid on Razorpay.
-    const pending = await client.query(
-      `
-      SELECT *
-      FROM community_join_payments
-      WHERE LOWER(email) = $1
-        AND purchase_status = 'pending_payment'
-        AND payment_status = 'pending'
-        AND razorpay_order_id IS NOT NULL
-      ORDER BY created_at DESC
-      LIMIT 1
-      `,
-      [normalizedEmail]
-    );
-
-    if (pending.rowCount > 0) {
-      const payment = pending.rows[0];
-      const pendingAmount = Number(payment.amount) || finalAmount;
-
-      try {
-        const remoteOrder = await razorpay.orders.fetch(payment.razorpay_order_id);
-        const remoteAmount = Number(remoteOrder.amount);
-        const expectedPaise = Math.round(pendingAmount * 100);
-        const reusable =
-          remoteOrder.status === "created" && remoteAmount === expectedPaise;
-
-        console.log("[community-join/create] pending order check", {
-          local_order_id: payment.razorpay_order_id,
-          remote_status: remoteOrder.status,
-          remote_amount: remoteAmount,
-          expected_paise: expectedPaise,
-          reusable,
-        });
-
-        if (reusable) {
-          return res.status(200).json({
-            success: true,
-            message: "Existing community join payment order reused.",
-            payment,
-            razorpayOrder: {
-              id: payment.razorpay_order_id,
-              amount: remoteAmount,
-              currency: remoteOrder.currency || "INR",
-              key: RAZORPAY_KEY_ID,
-            },
-          });
-        }
-
-        // Stale/paid/mismatched order — mark local row failed and create a fresh order.
-        await client.query(
-          `
-          UPDATE community_join_payments
-          SET payment_status = 'failed',
-              purchase_status = 'failed',
-              updated_at = NOW()
-          WHERE id = $1
-          `,
-          [payment.id]
-        );
-      } catch (fetchError) {
-        console.warn("[community-join/create] pending order fetch failed; creating fresh order", {
-          local_order_id: payment.razorpay_order_id,
-          message: fetchError.message,
-          statusCode: fetchError.statusCode,
-        });
-        await client.query(
-          `
-          UPDATE community_join_payments
-          SET payment_status = 'failed',
-              purchase_status = 'failed',
-              updated_at = NOW()
-          WHERE id = $1
-          `,
-          [payment.id]
-        );
-      }
-    }
+    // -----------------------------------------
+    // 4. Create purchase ID
+    // -----------------------------------------
 
     const purchaseId =
-      "CJ-" + Date.now() + "-" + Math.floor(Math.random() * 9999);
+      "CJ-" +
+      Date.now() +
+      "-" +
+      Math.floor(Math.random() * 9999);
 
-    const order = await createRazorpayOrder(finalAmount, "INR", purchaseId);
+    // -----------------------------------------
+    // 5. Create Razorpay order
+    // -----------------------------------------
+
+    const order = await createRazorpayOrder(
+      finalAmount,
+      "INR",
+      purchaseId
+    );
+
+    console.log(
+      "[community-join/create] Razorpay order created",
+      {
+        purchase_id: purchaseId,
+        razorpay_order_id: order.id,
+        amount: order.amount,
+        currency: order.currency,
+      }
+    );
+
+    // -----------------------------------------
+    // 6. SAVE PENDING PAYMENT
+    // -----------------------------------------
 
     const { rows } = await client.query(
       `
@@ -215,12 +186,24 @@ const createCommunityJoinPayment = async (req, res) => {
         source,
         notes
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending_payment', $7, $8, $9)
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        'pending',
+        'pending_payment',
+        $7,
+        $8,
+        $9
+      )
       RETURNING *
       `,
       [
         purchaseId,
-        name.trim(),
+        fullName,
         normalizedEmail,
         phone.trim(),
         finalAmount,
@@ -231,17 +214,26 @@ const createCommunityJoinPayment = async (req, res) => {
       ]
     );
 
-    console.log("[community-join/create] payment row inserted", {
-      purchase_id: rows[0].purchase_id,
-      razorpay_order_id: rows[0].razorpay_order_id,
-      amount: rows[0].amount,
-      payment_status: rows[0].payment_status,
-    });
+    console.log(
+      "[community-join/create] pending payment saved",
+      {
+        purchase_id: rows[0].purchase_id,
+        razorpay_order_id: rows[0].razorpay_order_id,
+        payment_status: rows[0].payment_status,
+        purchase_status: rows[0].purchase_status,
+      }
+    );
+
+    // -----------------------------------------
+    // 7. Return Razorpay details
+    // -----------------------------------------
 
     return res.status(201).json({
       success: true,
       message: "Community join payment order created.",
+
       payment: rows[0],
+
       razorpayOrder: {
         id: order.id,
         amount: order.amount,
@@ -250,18 +242,21 @@ const createCommunityJoinPayment = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Create Community Join Payment Error:", {
-      message: error.message,
-      statusCode: error.statusCode,
-      error: error.error || null,
-    });
+    console.error(
+      "Create Community Join Payment Error:",
+      {
+        message: error.message,
+        statusCode: error.statusCode,
+        error: error.error || null,
+      }
+    );
+
     return res.status(500).json({
       success: false,
       message: error.message || "Internal Server Error",
     });
   }
 };
-
 /**
  * Post-checkout verification.
  * Expects razorpayOrderId, razorpayPaymentId, razorpaySignature from Razorpay handler.

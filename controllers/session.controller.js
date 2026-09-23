@@ -1,5 +1,6 @@
 const { client } = require("../cleint/client");
 const { uploadToCloudinary } = require("../cleint/cloudinary");
+const { createRazorpayOrder } = require("../utils/razorpay");
 
 const SESSION_RETURN = `
   s.id,
@@ -685,59 +686,152 @@ const getMyInvites = async (req,res)=>{
 
 }
 
-const purchaseSession = async(req,res)=>{
+const purchaseSession = async (req, res) => {
+  try {
+    const { sessionId, amount } = req.body;
+    const userId ="88d6f2fc-be8f-4e21-bcd1-a8ae96aa214f";
 
-  const {sessionId,paymentId,amount}=req.body;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized.",
+      });
+    }
 
-  const userId=req.user.id;
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        message: "sessionId is required.",
+      });
+    }
 
-  // Verify payment here
+    const sessionResult = await client.query(
+      `SELECT * FROM sessions WHERE id = $1`,
+      [sessionId]
+    );
 
-  await pool.query(
+    if (sessionResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Session not found",
+      });
+    }
 
-  `INSERT INTO session_purchases
-  (
-  session_id,
-  user_id,
-  payment_id,
-  amount,
-  payment_status
-  )
-  VALUES($1,$2,$3,$4,'SUCCESS')
+    const session = sessionResult.rows[0];
+    const sessionPrice = Number(session.discount_price ?? session.price);
 
-  ON CONFLICT(session_id,user_id)
+    if (!Number.isFinite(sessionPrice) || sessionPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Session price is not configured.",
+      });
+    }
 
-  DO UPDATE SET
+    if (sessionPrice !== Number(amount)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid amount",
+      });
+    }
 
-  payment_status='SUCCESS',
-  payment_id=EXCLUDED.payment_id
+    const existingPurchase = await client.query(
+      `SELECT id
+       FROM session_purchases
+       WHERE session_id = $1
+         AND user_id = $2
+         AND (
+           LOWER(COALESCE(payment_status, '')) = 'success'
+           OR LOWER(COALESCE(purchase_status, '')) IN ('confirmed', 'partially_paid')
+         )`,
+      [sessionId, userId]
+    );
 
-  `,
-  [sessionId,userId,paymentId,amount]
-  );
+    if (existingPurchase.rowCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Session already purchased",
+      });
+    }
 
-  await pool.query(
+    const purchaseId =
+      "PUR-" + Date.now() + "-" + Math.floor(Math.random() * 9999);
 
-  `UPDATE session_invites
+    const payment = await createRazorpayOrder(
+      sessionPrice,
+      "INR",
+      purchaseId
+    );
 
-  SET
+    if (!payment?.id) {
+      return res.status(500).json({
+        success: false,
+        message: "Unable to create payment order",
+      });
+    }
 
-  status='ACCEPTED',
-  accepted_at=NOW()
+    await client.query(
+      `INSERT INTO session_purchases
+      (
+        purchase_id,
+        session_id,
+        user_id,
+        expert_id,
+        quantity,
+        payment_type,
+        payment_status,
+        purchase_status,
+        amount_before_discount,
+        discount_amount,
+        tax_amount,
+        processing_fee,
+        final_amount,
+        amount_paid,
+        remaining_amount,
+        razorpay_order_id
+      )
+      VALUES ($1, $2, $3, $4, 1, 'full', 'pending', 'pending_payment', $5, 0, 0, 0, $5, 0, $5, $6)
+      ON CONFLICT (session_id, user_id)
+      DO UPDATE SET
+        purchase_id = EXCLUDED.purchase_id,
+        payment_status = 'pending',
+        purchase_status = 'pending_payment',
+        amount_before_discount = EXCLUDED.amount_before_discount,
+        final_amount = EXCLUDED.final_amount,
+        amount_paid = 0,
+        remaining_amount = EXCLUDED.remaining_amount,
+        razorpay_order_id = EXCLUDED.razorpay_order_id,
+        updated_at = NOW()`,
+      [
+        purchaseId,
+        sessionId,
+        userId,
+        session.expert_id,
+        sessionPrice,
+        payment.id,
+      ]
+    );
 
-  WHERE session_id=$1
-  AND user_id=$2
+    return res.status(200).json({
+      success: true,
+      message: "Razorpay order created",
+      data: {
+        orderId: payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        keyId: process.env.RAZORPAY_KEY_ID,
+        sessionId,
+        purchaseId,
+      },
+    });
+  } catch (error) {
+    console.error("Purchase session error:", error);
 
-  `,
-  [sessionId,userId]
-
-  );
-
-  res.json({
-      success:true
-  });
-
-}
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Something went wrong",
+    });
+  }
+};
 const getSessionAccess = async(req,res)=>{
 
   const sessionId=req.params.id;
@@ -777,14 +871,30 @@ const getSessionAccess = async(req,res)=>{
   
   }
 
-
+const fetchSessionPurchaseByUser = async(req,res)=>{
+  const userId=req.user.id;
+  try {
+    const result=await client.query(
+      `SELECT * FROM session_purchases WHERE user_id=$1`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({
+      success:false,
+      message:"Internal Server Error"
+    });
+  }
+}
 module.exports = {
   createRecordedSession,
   createLiveSession,
   getAllSessions,
   getSessionById,
   getSessionsByExpertId,
+  purchaseSession,
   getSessionsByCategoryId,
   updateSession,
+  fetchSessionPurchaseByUser,
   deleteSessions,
 };

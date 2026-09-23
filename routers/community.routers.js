@@ -15,6 +15,7 @@ const communityRouter = express.Router();
 communityRouter.delete("/delete-lead/:id", deleteJoinLead);
 communityRouter.post("/join-payment", createCommunityJoinPayment);
 // Status check for logged-in users (Just99 congrats modal).
+
 communityRouter.post("/verify-payment", auth, getCommunityJoinPaymentStatus);
 // Post-checkout signature verification (also available under /payment/...).
 communityRouter.post("/confirm-payment", verifyCommunityJoinPayment);

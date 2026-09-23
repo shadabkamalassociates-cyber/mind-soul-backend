@@ -8,6 +8,8 @@ const {
   getSessionsByCategoryId,
   updateSession,
   deleteSessions,
+  purchaseSession,
+  fetchSessionPurchaseByUser,
 } = require("../controllers/session.controller");
 const { auth } = require("../middleware/role");
 const { sessionUpload } = require("../middleware/upload");
@@ -23,5 +25,7 @@ sessionRouter.get("/fetch-by-category/:category_id", getSessionsByCategoryId);
 sessionRouter.put("/update/:id", sessionUpload, updateSession);
 sessionRouter.delete("/delete/:id", deleteSessions);
 sessionRouter.delete("/delete", deleteSessions);
+sessionRouter.post("/purchase-session",  purchaseSession);
+sessionRouter.get("/fetch-session-purchase-by-user", fetchSessionPurchaseByUser);
 
 module.exports = sessionRouter;

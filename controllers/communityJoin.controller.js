@@ -11,7 +11,7 @@ const {
 } = require("../utils/whatsapp");
 
 const COMMUNITY_JOIN_AMOUNT = 11;
-const COMMUNITY_JOIN_AMOUNT = 11;
+// const COMMUNITY_JOIN_AMOUNT = 11;
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 const normalizePhone = (phone) => String(phone || "").replace(/\D/g, "");
@@ -521,8 +521,45 @@ const fetchAllPayments = async (req, res) => {
   }
 };
 
+const deleteJoinLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { secretkey } = req.body;
+    if(secretkey !== 'mindsoul') {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized.",
+      });
+    } 
+    const payment = await client.query(
+      `DELETE FROM community_join_payments WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    const lead = await client.query(
+      `DELETE FROM community_join_leads WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    if (!payment.rowCount && !lead.rowCount) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead not found.",
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Lead deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete Join Lead Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Internal Server Error",
+    });
+  }
+};
 module.exports = {
   submitJoinLead,
+  deleteJoinLead,
   createCommunityJoinPayment,
   verifyCommunityJoinPayment,
   getCommunityJoinPaymentStatus,
